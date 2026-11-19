@@ -1,0 +1,510 @@
+package com.cinemaai.payment.service.impl;
+
+import com.cinemaai.payment.client.BookingClient;
+import com.cinemaai.payment.dto.response.PaymentResponse;
+import com.cinemaai.payment.dto.response.VNPayPaymentResponse;
+import com.cinemaai.payment.entity.OutboxEvent;
+import com.cinemaai.payment.entity.Payment;
+import com.cinemaai.payment.enums.OutboxStatus;
+import com.cinemaai.payment.enums.PaymentProvider;
+import com.cinemaai.payment.enums.PaymentStatus;
+import com.cinemaai.payment.event.PaymentSucceededEvent;
+import com.cinemaai.payment.exception.BadRequestException;
+import com.cinemaai.payment.exception.NotFoundException;
+import com.cinemaai.payment.exception.UnauthorizedException;
+import com.cinemaai.payment.mapper.PaymentMapper;
+import com.cinemaai.payment.repository.OutboxEventRepository;
+import com.cinemaai.payment.repository.PaymentRepository;
+import com.cinemaai.payment.service.OutboxPublisherWorker;
+import com.cinemaai.payment.service.PaymentService;
+import com.cinemaai.payment.service.LoyaltyService;
+import com.cinemaai.payment.util.VNPayUtil;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.math.BigDecimal;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.text.SimpleDateFormat;
+import java.time.LocalDateTime;
+import java.util.*;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class PaymentServiceImpl implements PaymentService {
+
+    private static void requireAuthenticatedUser(Long userId) {
+        if (userId == null || userId <= 0) {
+            throw new UnauthorizedException("Authenticated user is required");
+        }
+    }
+
+    private static void requireOwner(Long userId, Long ownerId) {
+        if (ownerId != null && !userId.equals(ownerId)) throw new NotFoundException("Payment resource not found");
+    }
+
+    private final PaymentRepository paymentRepository;
+    private final OutboxEventRepository outboxEventRepository;
+    private final OutboxPublisherWorker outboxPublisherWorker;
+    private final BookingClient bookingClient;
+    private final LoyaltyService loyaltyService;
+    private final ObjectMapper objectMapper;
+    private final PaymentMapper paymentMapper;
+
+    @Value("${vnpay.tmn-code}")
+    private String vnpTmnCode;
+
+    @Value("${vnpay.hash-secret}")
+    private String vnpHashSecret;
+
+    @Value("${vnpay.pay-url}")
+    private String vnpPayUrl;
+
+    @Value("${vnpay.return-url}")
+    private String vnpReturnUrl;
+
+    @Override
+    @Transactional
+    public VNPayPaymentResponse createVnpayPayment(Long userId, Long bookingId, Long foodOrderId, String clientIp) {
+        requireAuthenticatedUser(userId);
+        if (bookingId != null && foodOrderId != null) {
+            throw new BadRequestException("Specify only one order");
+        }
+        BigDecimal amount = BigDecimal.ZERO;
+
+        BookingClient.BookingInfo activeBooking = null;
+        if (bookingId != null) {
+            activeBooking = bookingClient.getBooking(bookingId);
+            requireOwner(userId, activeBooking.userId());
+            rejectUnverifiedLoyaltyRedemption(activeBooking);
+            if (!isBookingAwaitingValidPayment(activeBooking, LocalDateTime.now())
+                    || activeBooking.totalAmount() == null || activeBooking.totalAmount().signum() <= 0) {
+                throw new BadRequestException("Thời gian giữ ghế đã hết hạn (3 phút). Vui lòng chọn lại ghế.");
+            }
+            amount = activeBooking.totalAmount();
+        } else if (foodOrderId != null) {
+            BookingClient.FoodOrderInfo foodOrder = bookingClient.getFoodOrder(foodOrderId);
+            requireOwner(userId, foodOrder.userId());
+            amount = foodOrder.totalAmount();
+        } else {
+            throw new BadRequestException("Phải chỉ định bookingId hoặc foodOrderId để thanh toán.");
+        }
+
+        // Create or reuse pending payment
+        Payment payment = (bookingId != null)
+                ? paymentRepository.findByBookingIdAndStatus(bookingId, PaymentStatus.PENDING).orElse(null)
+                : paymentRepository.findByFoodOrderIdAndStatus(foodOrderId, PaymentStatus.PENDING).orElse(null);
+
+        if (payment != null) requireOwner(userId, payment.getUserId());
+
+        if (bookingId != null &&
+        paymentRepository.existsByBookingIdAndStatus(
+                bookingId,
+                PaymentStatus.SUCCESS
+        )) {
+    throw new BadRequestException("Booking đã được thanh toán.");
+}
+        if (payment == null) {
+            payment = Payment.builder()
+                    .bookingId(bookingId)
+                    .foodOrderId(foodOrderId)
+                    .userId(userId)
+                    .provider(PaymentProvider.VNPAY)
+                    .amount(amount)
+                    .status(PaymentStatus.PENDING)
+                    .build();
+            try {
+                payment = paymentRepository.saveAndFlush(payment);
+            } catch (DataIntegrityViolationException ex) {
+                throw new BadRequestException("Booking đang có một giao dịch thanh toán khác đang xử lý.");
+            }
+        } else {
+            payment.setAmount(amount);
+            payment = paymentRepository.save(payment);
+        }
+
+        // Generate VNPay URL
+        String orderRefCode = null;
+        String orderInfo = null;
+        if (bookingId != null) {
+            BookingClient.BookingInfo booking = bookingClient.getBooking(bookingId);
+            orderRefCode = booking.bookingCode();
+            orderInfo = "Thanh toan ve xem phim ma " + orderRefCode;
+        } else if (foodOrderId != null) {
+            BookingClient.FoodOrderInfo foodOrder = bookingClient.getFoodOrder(foodOrderId);
+            orderRefCode = foodOrder.foodOrderCode();
+            orderInfo = "Thanh toan bap nuoc ma " + orderRefCode;
+        }
+        String txnRef = payment.getId() + "-" + (orderRefCode != null && !orderRefCode.isBlank() ? orderRefCode : System.currentTimeMillis());
+
+        Map<String, String> vnpParams = new HashMap<>();
+        vnpParams.put("vnp_Version", "2.1.0");
+        vnpParams.put("vnp_Command", "pay");
+        vnpParams.put("vnp_TmnCode", vnpTmnCode);
+        vnpParams.put("vnp_Amount", String.valueOf(amount.multiply(BigDecimal.valueOf(100)).longValue()));
+        vnpParams.put("vnp_CurrCode", "VND");
+        vnpParams.put("vnp_TxnRef", txnRef);
+        vnpParams.put("vnp_OrderInfo", orderInfo);
+        vnpParams.put("vnp_OrderType", "other");
+        vnpParams.put("vnp_Locale", "vn");
+        vnpParams.put("vnp_ReturnUrl", vnpReturnUrl);
+        vnpParams.put("vnp_IpAddr", clientIp != null && !clientIp.isBlank() ? clientIp : "127.0.0.1");
+
+        java.time.ZonedDateTime nowVn = java.time.ZonedDateTime.now(java.time.ZoneId.of("Asia/Ho_Chi_Minh"));
+        java.time.format.DateTimeFormatter vnpFmt = java.time.format.DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
+        String vnpCreateDate = nowVn.format(vnpFmt);
+        vnpParams.put("vnp_CreateDate", vnpCreateDate);
+        String vnpExpireDate = nowVn.plusMinutes(15).format(vnpFmt);
+        vnpParams.put("vnp_ExpireDate", vnpExpireDate);
+
+        List<String> fieldNames = new ArrayList<>(vnpParams.keySet());
+        Collections.sort(fieldNames);
+
+        StringBuilder hashData = new StringBuilder();
+        StringBuilder query = new StringBuilder();
+
+        for (String fieldName : fieldNames) {
+            String fieldValue = vnpParams.get(fieldName);
+            if (fieldValue != null && !fieldValue.isEmpty()) {
+                if (!hashData.isEmpty()) {
+                    hashData.append('&');
+                    query.append('&');
+                }
+                hashData.append(fieldName).append('=').append(URLEncoder.encode(fieldValue, StandardCharsets.US_ASCII));
+                query.append(URLEncoder.encode(fieldName, StandardCharsets.US_ASCII))
+                        .append('=')
+                        .append(URLEncoder.encode(fieldValue, StandardCharsets.US_ASCII));
+            }
+        }
+
+        String vnpSecureHash = VNPayUtil.hmacSHA512(vnpHashSecret, hashData.toString());
+        query.append("&vnp_SecureHash=").append(vnpSecureHash);
+        String paymentUrl = vnpPayUrl + "?" + query;
+
+        payment.setPaymentUrl(paymentUrl);
+        paymentRepository.save(payment);
+
+        return new VNPayPaymentResponse(payment.getId(), paymentUrl, txnRef, amount, "VNPAY");
+    }
+
+    @Override
+    @Transactional
+    public PaymentResponse mockPayment(Long userId, Long bookingId, Long foodOrderId) {
+        requireAuthenticatedUser(userId);
+        if (bookingId != null && foodOrderId != null) {
+            throw new BadRequestException("Specify only one order");
+        }
+        if (bookingId == null && foodOrderId == null) {
+            throw new BadRequestException("An order identifier is required");
+        }
+
+        Payment payment = (bookingId != null)
+                ? paymentRepository.findByBookingId(bookingId).orElse(null)
+                : paymentRepository.findByFoodOrderId(foodOrderId).orElse(null);
+        if (payment != null) {
+            requireOwner(userId, payment.getUserId());
+            boolean linkedToRequestedResource = bookingId != null
+                    ? bookingId.equals(payment.getBookingId()) && payment.getFoodOrderId() == null
+                    : foodOrderId.equals(payment.getFoodOrderId()) && payment.getBookingId() == null;
+            if (!linkedToRequestedResource) {
+                throw new NotFoundException("Payment does not belong to the requested order");
+            }
+            if (payment.getStatus() == PaymentStatus.SUCCESS) {
+                return paymentMapper.toResponse(payment);
+            }
+        }
+        BigDecimal amount = BigDecimal.ZERO;
+
+        if (bookingId != null) {
+            BookingClient.BookingInfo booking = bookingClient.getBooking(bookingId);
+            requireOwner(userId, booking.userId());
+            rejectUnverifiedLoyaltyRedemption(booking);
+            if (!isBookingAwaitingValidPayment(booking, LocalDateTime.now())) {
+                throw new BadRequestException("Thời gian giữ ghế đã hết hạn (3 phút). Đơn đặt vé đã bị hủy.");
+            }
+            amount = booking.totalAmount();
+        } else if (foodOrderId != null) {
+            BookingClient.FoodOrderInfo foodOrder = bookingClient.getFoodOrder(foodOrderId);
+            requireOwner(userId, foodOrder.userId());
+            amount = foodOrder.totalAmount();
+        } else {
+            throw new BadRequestException("Phải chỉ định bookingId hoặc foodOrderId để thanh toán.");
+        }
+
+        if (payment == null) {
+            payment = Payment.builder()
+                    .bookingId(bookingId)
+                    .foodOrderId(foodOrderId)
+                    .userId(userId)
+                    .provider(PaymentProvider.MOCK)
+                    .amount(amount)
+                    .build();
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        payment.setStatus(PaymentStatus.SUCCESS);
+        payment.setPaidAt(now);
+        payment.setTransactionId("MOCK-" + System.currentTimeMillis());
+        payment.setPaymentAccountLabel("MOCK WALLET");
+        payment = paymentRepository.save(payment);
+
+        // Transactional Outbox: Write PaymentSucceededEvent in the same DB transaction
+        writeOutboxEvent(payment, now);
+        triggerOutboxPublishImmediately();
+
+        schedulePostCommitSideEffects(payment, now, true);
+
+        return paymentMapper.toResponse(payment);
+    }
+
+    @Override
+    @Transactional
+    public Map<String, String> processVnpayIpn(Map<String, String> params) {
+        Map<String, String> fields = new HashMap<>(params);
+        String secureHash = fields.remove("vnp_SecureHash");
+        fields.remove("vnp_SecureHashType");
+
+        String signValue = VNPayUtil.hashAllFields(fields, vnpHashSecret);
+        if (secureHash == null || !secureHash.equalsIgnoreCase(signValue)) {
+            log.warn("VNPay IPN Invalid Checksum. Expected: {}, Got: {}", signValue, secureHash);
+            return Map.of("RspCode", "97", "Message", "Invalid Checksum");
+        }
+
+        String txnRef = params.get("vnp_TxnRef");
+        if (txnRef == null || txnRef.isBlank()) {
+            return Map.of("RspCode", "01", "Message", "Order not found");
+        }
+
+        Long paymentId;
+        try {
+            paymentId = Long.parseLong(txnRef.split("[-_]")[0]);
+        } catch (Exception ex) {
+            return Map.of("RspCode", "01", "Message", "Invalid transaction reference");
+        }
+
+        Payment payment = paymentRepository.findById(paymentId).orElse(null);
+        if (payment == null) {
+            return Map.of("RspCode", "01", "Message", "Order not found");
+        }
+
+        // Amount check
+        long vnpAmount = Long.parseLong(params.getOrDefault("vnp_Amount", "0"));
+        long expectedAmount = payment.getAmount().multiply(BigDecimal.valueOf(100)).longValue();
+        if (vnpAmount != expectedAmount) {
+            return Map.of("RspCode", "04", "Message", "Invalid Amount");
+        }
+
+        // Idempotency check: Already processed
+        if (payment.getStatus() == PaymentStatus.SUCCESS) {
+            return Map.of("RspCode", "00", "Message", "Order already confirmed");
+        }
+
+        String responseCode = params.get("vnp_ResponseCode");
+        LocalDateTime now = LocalDateTime.now();
+
+        if ("00".equals(responseCode)) {
+            BookingClient.BookingInfo capturedBooking = null;
+            if (payment.getBookingId() != null) {
+                try {
+                    capturedBooking = bookingClient.getBooking(payment.getBookingId());
+                } catch (Exception ex) {
+                    log.warn("Failed to check booking expiration in IPN for booking {}: {}", payment.getBookingId(), ex.getMessage());
+                }
+            }
+            payment.setStatus(PaymentStatus.SUCCESS);
+            payment.setPaidAt(now);
+            payment.setTransactionId(params.get("vnp_TransactionNo"));
+            payment.setPaymentAccountLabel("VNPAY " + params.getOrDefault("vnp_BankCode", ""));
+            payment.setCallbackPayload(params.toString());
+            paymentRepository.save(payment);
+
+            if (payment.getBookingId() != null
+                    && (capturedBooking == null || hasUnverifiedLoyaltyRedemption(capturedBooking)
+                        || !isBookingAwaitingValidPayment(capturedBooking, now))) {
+                log.error("VNPay captured payment {} for booking {} that cannot be safely fulfilled; preserving SUCCESS callback evidence for manual reconciliation without issuing tickets or loyalty",
+                        payment.getId(), payment.getBookingId());
+                return Map.of("RspCode", "00", "Message", "Payment captured; manual reconciliation required");
+            }
+
+            // Transactional Outbox pattern: Record event in the same DB transaction
+            writeOutboxEvent(payment, now);
+            triggerOutboxPublishImmediately();
+
+            schedulePostCommitSideEffects(payment, now, true);
+
+            log.info("VNPay IPN Success for Payment id={}, Booking id={}, FoodOrder id={}", payment.getId(), payment.getBookingId(), payment.getFoodOrderId());
+            return Map.of("RspCode", "00", "Message", "Confirm Success");
+        } else {
+            payment.setStatus(PaymentStatus.FAILED);
+            payment.setCallbackPayload(params.toString());
+            paymentRepository.save(payment);
+            log.warn("VNPay IPN Failed for Payment id={}, code={}", payment.getId(), responseCode);
+            return Map.of("RspCode", "00", "Message", "Confirm Success");
+        }
+    }
+
+    private void schedulePostCommitSideEffects(Payment payment, LocalDateTime paidAt, boolean awardLoyalty) {
+        Runnable action = () -> performPostCommitSideEffects(payment, paidAt, awardLoyalty);
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    action.run();
+                }
+            });
+        } else {
+            action.run();
+        }
+    }
+
+    private void performPostCommitSideEffects(Payment payment, LocalDateTime paidAt, boolean awardLoyalty) {
+        try {
+            if (payment.getBookingId() != null) {
+                bookingClient.markBookingPaid(payment.getBookingId(), payment.getTransactionId(), paidAt);
+            } else if (payment.getFoodOrderId() != null) {
+                bookingClient.markFoodOrderPaid(payment.getFoodOrderId(), payment.getTransactionId(), paidAt);
+            }
+        } catch (Exception ex) {
+            log.warn("Post-commit payment fulfillment call failed for payment {}; checking downstream state before loyalty: {}",
+                    payment.getId(), ex.getMessage());
+        }
+
+        if (!awardLoyalty || payment.getFoodOrderId() == null) return;
+        try {
+            Long targetUserId = payment.getUserId();
+            String orderCode = null;
+            try {
+                var order = bookingClient.getFoodOrder(payment.getFoodOrderId());
+                if (order != null) {
+                    if (order.userId() != null) targetUserId = order.userId();
+                    if (order.foodOrderCode() != null) orderCode = order.foodOrderCode();
+                }
+            } catch (Exception ex) {
+                log.warn("Could not retrieve food order details from bookingClient for payment {}: {}", payment.getId(), ex.getMessage());
+            }
+
+            if (orderCode == null && payment.getCallbackPayload() != null) {
+                java.util.regex.Matcher m = java.util.regex.Pattern.compile("FO-[0-9\\-]+").matcher(payment.getCallbackPayload());
+                if (m.find()) {
+                    orderCode = m.group(0);
+                }
+            }
+            if (orderCode == null) {
+                orderCode = "FO-" + payment.getFoodOrderId();
+            }
+
+            if (targetUserId != null && payment.getAmount() != null && payment.getAmount().signum() > 0) {
+                loyaltyService.awardPointsForFoodOrder(
+                        targetUserId, payment.getFoodOrderId(), orderCode, payment.getAmount());
+            }
+        } catch (Exception ex) {
+            log.warn("Post-commit loyalty could not be confirmed for payment {}; durable outbox remains available for fulfillment retry: {}",
+                    payment.getId(), ex.getMessage());
+        }
+    }
+
+    private void triggerOutboxPublishImmediately() {
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    try {
+                        outboxPublisherWorker.publishPendingEvents();
+                    } catch (Exception ex) {
+                        log.warn("Immediate outbox publish failed (scheduled worker will retry): {}", ex.getMessage());
+                    }
+                }
+            });
+        } else {
+            try {
+                outboxPublisherWorker.publishPendingEvents();
+            } catch (Exception ex) {
+                log.warn("Immediate outbox publish failed: {}", ex.getMessage());
+            }
+        }
+    }
+
+    private boolean hasUnverifiedLoyaltyRedemption(BookingClient.BookingInfo booking) {
+        return false;
+    }
+
+    private boolean isBookingAwaitingValidPayment(BookingClient.BookingInfo booking, LocalDateTime now) {
+        return booking != null
+                && "PENDING_PAYMENT".equalsIgnoreCase(booking.status())
+                && booking.holdExpiresAt() != null
+                && booking.holdExpiresAt().isAfter(now);
+    }
+
+    private void rejectUnverifiedLoyaltyRedemption(BookingClient.BookingInfo booking) {
+        // Loyalty redemption enabled
+    }
+
+    private void writeOutboxEvent(Payment payment, LocalDateTime paidAt) {
+        String payload;
+        String eventId = UUID.randomUUID().toString();
+        PaymentSucceededEvent event = new PaymentSucceededEvent(
+                eventId,
+                payment.getId(),
+                payment.getBookingId(),
+                payment.getFoodOrderId(),
+                payment.getUserId(),
+                payment.getAmount(),
+                payment.getProvider().name(),
+                paidAt
+        );
+        try {
+            payload = objectMapper.writeValueAsString(event);
+        } catch (Exception ex) {
+            throw new IllegalStateException("Failed to serialize PaymentSucceededEvent", ex);
+        }
+
+        OutboxEvent outboxEvent = OutboxEvent.builder()
+                .aggregateType("PAYMENT")
+                .aggregateId(String.valueOf(payment.getId()))
+                .eventType("PaymentSucceededEvent")
+                .deduplicationKey(eventId)
+                .payload(payload)
+                .status(OutboxStatus.PENDING)
+                .createdAt(LocalDateTime.now())
+                .build();
+
+        outboxEventRepository.save(outboxEvent);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public PaymentResponse getPaymentByBooking(Long userId, Long bookingId) {
+        requireAuthenticatedUser(userId);
+        Payment payment = paymentRepository.findByBookingId(bookingId)
+                .orElseThrow(() -> new NotFoundException("Không tìm thấy giao dịch thanh toán cho booking: " + bookingId));
+        requireOwner(userId, payment.getUserId());
+        return paymentMapper.toResponse(payment);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public PaymentResponse getPaymentByFoodOrder(Long userId, Long foodOrderId) {
+        requireAuthenticatedUser(userId);
+        Payment payment = paymentRepository.findByFoodOrderId(foodOrderId)
+                .orElseThrow(() -> new NotFoundException("Khong tim thay giao dich thanh toan cho don bap nuoc: " + foodOrderId));
+        requireOwner(userId, payment.getUserId());
+        return paymentMapper.toResponse(payment);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public PaymentResponse getPaymentById(Long userId, Long paymentId) {
+        requireAuthenticatedUser(userId);
+        Payment payment = paymentRepository.findById(paymentId)
+                .orElseThrow(() -> new NotFoundException("Không tìm thấy giao dịch thanh toán id: " + paymentId));
+        requireOwner(userId, payment.getUserId());
+        return paymentMapper.toResponse(payment);
+    }
+}

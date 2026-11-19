@@ -1,0 +1,50 @@
+services:
+  ai-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: cinema-ai-service
+    restart: unless-stopped
+
+    ports:
+      - "${SERVER_PORT:-8001}:${SERVER_PORT:-8001}"
+
+    environment:
+      SERVER_PORT: ${SERVER_PORT:-8001}
+
+      # PostgreSQL - lấy từ env được chọn
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_SSLMODE: ${DB_SSLMODE:-prefer}
+
+      # RabbitMQ trên backend Docker network
+      RABBITMQ_HOST: ${RABBITMQ_HOST:-rabbitmq}
+      RABBITMQ_PORT: ${RABBITMQ_PORT:-5672}
+      RABBITMQ_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_PASS: ${RABBITMQ_PASS:-guest}
+
+      INTERNAL_GATEWAY_SECRET: ${INTERNAL_GATEWAY_SECRET}
+      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
+
+      CATALOG_SERVICE_URL: ${CATALOG_SERVICE_URL:-http://catalog-service:8082}
+      BOOKING_SERVICE_URL: ${BOOKING_SERVICE_URL:-http://booking-service:8083}
+
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+
+    volumes:
+      - ./:/app
+      - /app/.venv
+      - ./logs:/app/logs
+
+    networks:
+      - mss301-backend_cinema-network
+
+networks:
+  mss301-backend_cinema-network:
+    external: true

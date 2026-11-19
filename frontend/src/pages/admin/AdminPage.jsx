@@ -1,0 +1,2081 @@
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { motion, AnimatePresence } from 'motion/react';
+import {
+  Plus, Trash2, Edit3, Shield, ShieldAlert, FileText, Database,
+  Calendar, Users, DollarSign, Coins, Activity, AlertCircle, CheckCircle2,
+  Search, Sliders, ChevronDown, Check, RefreshCw, Layers, ShoppingBag,
+  BarChart2, Clock, Film, Play, Eye, EyeOff, TrendingUp, Info, Tags, Tag, LogOut, MessageSquare, Wallet,
+  Menu, MapPin, User, Building2, Clapperboard
+} from 'lucide-react';
+import { expireAuthSession, getStoredAuth, hasBackendAdminAccess, hasBackendManagerAccess } from '../../services/authService';
+import { adminService } from '../../services/adminService';
+import { useAuthStore } from '../../stores/useAuthStore';
+import { useUiStore } from '../../stores/useUiStore';
+import AdminOverviewPanel from './overview/AdminOverviewPanel';
+import AdminMoviesPanel from './catalog/AdminMoviesPanel';
+import AdminDirectorsPanel from './catalog/AdminDirectorsPanel';
+import AdminPricingPanel from './cinema/AdminPricingPanel';
+import AdminSystemSettingsPanel from './system/AdminSystemSettingsPanel';
+import AdminGenresPanel from './catalog/AdminGenresPanel';
+import AdminActorsPanel from './catalog/AdminActorsPanel';
+import AdminFoodsPanel from './catalog/AdminFoodsPanel';
+import AdminShowtimesPanel from './cinema/AdminShowtimesPanel';
+import AdminTransactionsPanel from './system/AdminTransactionsPanel';
+import AdminUsersPanel from './system/AdminUsersPanel';
+import AdminLoyaltyPanel from './system/AdminLoyaltyPanel';
+import AdminReviewsPanel from './system/AdminReviewsPanel';
+import AdminWalletPanel from './system/AdminWalletPanel';
+import AdminCinemaPanel from './cinema/AdminCinemaPanel';
+import AdminRoomsPanel from './cinema/AdminRoomsPanel';
+import AdminTicketsPanel from './cinema/AdminTicketsPanel';
+import AdminHeroBannerPanel from './marketing/AdminHeroBannerPanel';
+
+import AdminAuditPanel from './system/AdminAuditPanel';
+import AdminStatsPanel from './overview/AdminStatsPanel';
+import AdminFnbReportPanel from './overview/AdminFnbReportPanel';
+import AdminShowtimeIncidentsPanel from './cinema/AdminShowtimeIncidentsPanel';
+
+function NavItem({ icon: Icon, label, active, onClick, indent = false, badge = null, disabled = false, badgeText = null }) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={disabled ? undefined : onClick}
+      className={`w-full flex items-center gap-2 py-[7px] text-[11.5px] font-medium transition-all duration-100 border-l-2 ${
+        indent ? 'pl-6 pr-3' : 'pl-3 pr-3'
+      } ${
+        disabled
+          ? 'opacity-40 cursor-not-allowed text-neutral-500 hover:bg-transparent border-transparent'
+          : active
+            ? 'text-amber-400 bg-gradient-to-r from-amber-500/[0.09] to-transparent border-amber-500'
+            : 'text-neutral-100 hover:text-white hover:bg-white/[0.02] border-transparent'
+      }`}
+    >
+      <Icon className={`h-[13px] w-[13px] shrink-0 ${disabled ? 'text-neutral-600' : active ? 'text-amber-400' : 'text-neutral-300'}`} />
+      <span className="truncate leading-snug">{label}</span>
+      {badgeText && (
+        <span className="ml-auto border border-white/[0.08] bg-black/60 text-neutral-400 text-[8.5px] font-mono uppercase px-1.5 py-0.5 rounded leading-none shrink-0">
+          {badgeText}
+        </span>
+      )}
+      {!badgeText && badge > 0 && (
+        <span className="ml-auto bg-amber-500 text-black text-[9px] font-extrabold px-1.5 py-0.5 rounded-full leading-none shrink-0">
+          {badge}
+        </span>
+      )}
+      {!disabled && active && !badge && !badgeText && <span className="ml-auto h-1 w-1 shrink-0 rounded-full bg-amber-500" />}
+    </button>
+  );
+}
+
+function NavSectionLabel({ children }) {
+  return (
+    <div className="px-3 pt-4 pb-1.5 first:pt-2">
+      <span className="text-[9px] font-mono tracking-[0.22em] uppercase text-neutral-200 font-bold">{children}</span>
+    </div>
+  );
+}
+
+const SECTION_TITLE = {
+  overview: 'Tổng quan hệ thống', movies: 'Thư viện phim', genres: 'Thể loại phim',
+  actors: 'Diễn viên', directors: 'Đạo diễn', foods: 'Bắp nước / F&B', rooms: 'Phòng chiếu & ghế', pricing: 'Bảng giá vé', settings: 'Cấu hình hệ thống',
+  'hero-banners': 'Quản lý Hero Banner',
+  showtimes: 'Điều phối lịch chiếu', tickets: 'Quản lý vé', transactions: 'Giao dịch',
+  'showtime-incidents': 'Sự cố & Xử lý hoàn tiền', 'fnb-report': 'Báo cáo F&B',
+  statistics: 'Thống kê mua bán', audit: 'Audit log', users: 'Quản lý người dùng', staff: 'Nhân sự',
+  reviews: 'Đánh giá phim', loyalty: 'Quản lý điểm', cinewallet: 'CineWallet', cinema: 'Hệ thống cụm rạp',
+};
+
+const getNavGroup = (section) => {
+  if (['genres', 'actors', 'directors', 'movies'].includes(section)) return 'movies';
+  if (['hero-banners'].includes(section)) return 'marketing';
+  if (['foods', 'fnb-report'].includes(section)) return 'fnb';
+  if (['cinema', 'rooms', 'showtimes', 'pricing', 'tickets', 'transactions', 'showtime-incidents'].includes(section)) return 'cinema';
+  if (['statistics', 'audit'].includes(section)) return 'insights';
+  if (['staff'].includes(section)) return 'staff';
+  if (['users'].includes(section)) return 'users';
+  if (['loyalty', 'reviews', 'cinewallet', 'settings'].includes(section)) return 'system';
+  return null;
+};
+
+const ADMIN_SECTIONS = new Set([
+  'overview',
+  'hero-banners',
+  'genres',
+  'actors',
+  'directors',
+  'movies',
+  'foods',
+  'fnb-report',
+  'cinema',
+  'rooms',
+  'showtimes',
+  'pricing',
+  'showtime-incidents',
+  'tickets',
+  'transactions',
+  'statistics',
+  'audit',
+  'users',
+  'staff',
+  'reviews',
+  'loyalty',
+  'cinewallet',
+  'settings',
+]);
+
+const normalizeAdminSection = (section) => (ADMIN_SECTIONS.has(section) ? section : 'overview');
+
+export default function AdminDashboard({
+  moviesList,
+  setMoviesList,
+  bookedTickets,
+  setBookedTickets,
+  publicCinema,
+  onCinemaChanged = () => { },
+  onSelectMovie,
+  showToast = () => { },
+  initialSection = 'overview',
+  onSectionChange = () => { },
+  onFoodCatalogChanged = () => { },
+  isAdmin = false,
+  isManager = true,
+  currentUser = null,
+  basePath = '/admin'
+}) {
+  const navigate = useNavigate();
+
+  const userRole = (currentUser?.role || currentUser?.roles?.[0] || '').toUpperCase();
+  const isEffectiveAdmin = isAdmin || userRole.includes('ADMIN');
+  const isEffectiveManager = !isEffectiveAdmin && (isManager || userRole.includes('MANAGER'));
+  const toggleAdminSidebar = useUiStore((state) => state.toggleAdminSidebar);
+  const savedSidebarCollapsed = useUiStore((state) => state.adminSidebarCollapsed);
+  const [compactViewport, setCompactViewport] = useState(() => window.matchMedia('(max-width: 767px)').matches);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const sidebarCollapsed = compactViewport ? !mobileNavOpen : savedSidebarCollapsed;
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 767px)');
+    const update = () => { setCompactViewport(query.matches); setMobileNavOpen(false); };
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
+  const isLoggedIn = useAuthStore((state) => state.isLoggedIn);
+  const handleLogout = useAuthStore((state) => state.handleLogout);
+
+  const [activeTab, setActiveTab] = useState(normalizeAdminSection(initialSection)); // 'overview' | 'movies' | 'genres' | 'foods' | 'showtimes' | 'transactions' | 'users'
+  const [openNavGroup, setOpenNavGroup] = useState(getNavGroup(normalizeAdminSection(initialSection)));
+  const [activeChartPoint, setActiveChartPoint] = useState(6);
+  const [collapsedTooltip, setCollapsedTooltip] = useState(null); // { key: 'logo'|tab, y: number }
+  const [heroBannerInitialMovieId, setHeroBannerInitialMovieId] = useState(null);
+  // Create state for movies so the dashboard can add/update them
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filmFilter, setFilmFilter] = useState('ALL'); // 'ALL' | 'ACTIVE' | 'UPCOMING'
+  const [adminGenreFilter, setAdminGenreFilter] = useState('');
+  const [adminMoviePagination, setAdminMoviePagination] = useState({
+    page: 0,
+    size: 10,
+    totalPages: 1,
+    totalElements: moviesList.length
+  });
+
+  const toDateInputValue = (date) => {
+    const value = new Date(date);
+    value.setMinutes(value.getMinutes() - value.getTimezoneOffset());
+    return value.toISOString().slice(0, 10);
+  };
+  const addDaysInputValue = (days) => {
+    const date = new Date();
+    date.setDate(date.getDate() + days);
+    return toDateInputValue(date);
+  };
+  const buildDefaultMovieForm = () => ({
+    title: '',
+    englishTitle: '',
+    genre: '',
+    genreIds: [],
+    duration: 120,
+    ageRating: 'T13',
+    director: '',
+    synopsis: '',
+    trailerUrl: '',
+    language: 'Tiếng Việt',
+    subtitleLanguage: 'EN Sub',
+    status: 'NOW_SHOWING',
+    castList: '',
+    actorIds: [],
+    mainActorIds: [],
+    posterUrl: '',
+    bannerUrl: '',
+    releaseDate: toDateInputValue(new Date()),
+    endDate: addDaysInputValue(30)
+  });
+
+  // Form state for creating/editing movie
+  const [editingMovie, setEditingMovie] = useState(null); // null means adding a new one
+  const [showMovieForm, setShowMovieForm] = useState(false);
+  const [isMovieSaving, setIsMovieSaving] = useState(false);
+  const [movieFormError, setMovieFormError] = useState(null);
+  const [formData, setFormData] = useState(buildDefaultMovieForm);
+
+  // State to add a screening schedule
+  const [newShowtime, setNewShowtime] = useState({
+    movieId: moviesList[0]?.id || '',
+    hall: 'Phòng Chiếu Thượng Hạng Gold 01',
+    date: 'Thứ Bảy, 23/05/2026',
+    time: '19:30',
+    price: 120000
+  });
+  const [isAddingShowtime, setIsAddingShowtime] = useState(false);
+  const [showtimeSuccessMessage, setShowtimeSuccessMessage] = useState('');
+  const [genres, setGenres] = useState([]);
+  const [genrePagination, setGenrePagination] = useState({ page: 0, size: 10, totalPages: 1, totalItems: 0 });
+  const [genreSearch, setGenreSearch] = useState('');
+  const [genreForm, setGenreForm] = useState({ name: '', description: '' });
+  const [genreErrors, setGenreErrors] = useState({});
+  const [editingGenreId, setEditingGenreId] = useState(null);
+  const [isGenreLoading, setIsGenreLoading] = useState(false);
+  const [isGenreSaving, setIsGenreSaving] = useState(false);
+  const [actors, setActors] = useState([]);
+  const [actorSearch, setActorSearch] = useState('');
+  const [actorForm, setActorForm] = useState({ name: '', biography: '', avatarUrl: '' });
+  const [actorErrors, setActorErrors] = useState({});
+  const [editingActorId, setEditingActorId] = useState(null);
+  const [isActorLoading, setIsActorLoading] = useState(false);
+  const [isActorSaving, setIsActorSaving] = useState(false);
+  const [actorPagination, setActorPagination] = useState({ page: 0, size: 10, totalPages: 1, totalItems: 0 });
+  const [foodItems, setFoodItems] = useState([]);
+  const [foodCombos, setFoodCombos] = useState([]);
+  const [foodSearch, setFoodSearch] = useState('');
+  const [foodKind, setFoodKind] = useState('item');
+  const [editingFood, setEditingFood] = useState(null);
+  const [foodForm, setFoodForm] = useState({
+    name: '',
+    description: '',
+    price: '',
+    imageUrl: '',
+    status: 'ACTIVE'
+  });
+  const [foodErrors, setFoodErrors] = useState({});
+  const [isFoodLoading, setIsFoodLoading] = useState(false);
+  const [isFoodSaving, setIsFoodSaving] = useState(false);
+  const [isFoodImageUploading, setIsFoodImageUploading] = useState(false);
+  const [adminUsers, setAdminUsers] = useState([]);
+  const [selectedAdminUser, setSelectedAdminUser] = useState(null);
+  const [userSearch, setUserSearch] = useState('');
+  const [isUsersLoading, setIsUsersLoading] = useState(false);
+  const [isUserDetailLoading, setIsUserDetailLoading] = useState(false);
+  const [isUserStatusSaving, setIsUserStatusSaving] = useState(false);
+  const [isStaffCreating, setIsStaffCreating] = useState(false);
+
+  React.useEffect(() => {
+    if ((!isAdmin && !isManager) || activeTab !== 'movies') return undefined;
+
+    const token = getAdminToken(false);
+    if (!token) {
+      setAdminMoviePagination((prev) => ({
+        ...prev,
+        totalElements: moviesList.length,
+        totalPages: Math.max(1, Math.ceil(moviesList.length / Math.max(prev.size, 1)))
+      }));
+      return undefined;
+    }
+
+    let cancelled = false;
+    let approvalStatus = undefined;
+    let publicationStatus = undefined;
+    let showingStatus = undefined;
+
+    if (filmFilter === 'DRAFT') approvalStatus = 'DRAFT';
+    else if (filmFilter === 'PENDING_APPROVAL') approvalStatus = 'PENDING_APPROVAL';
+    else if (filmFilter === 'APPROVED') approvalStatus = 'APPROVED';
+    else if (filmFilter === 'REJECTED') approvalStatus = 'REJECTED';
+    else if (filmFilter === 'PUBLISHED') publicationStatus = 'PUBLISHED';
+    else if (filmFilter === 'ARCHIVED') publicationStatus = 'ARCHIVED';
+    else if (filmFilter === 'ACTIVE' || filmFilter === 'NOW_SHOWING') showingStatus = 'NOW_SHOWING';
+    else if (filmFilter === 'UPCOMING') showingStatus = 'UPCOMING';
+
+    const timeoutId = setTimeout(async () => {
+      try {
+        const pageData = await adminService.searchAdminMoviesPage(token, {
+          keyword: searchQuery.trim(),
+          status: showingStatus,
+          approvalStatus,
+          publicationStatus,
+          genreId: adminGenreFilter,
+          page: adminMoviePagination.page,
+          size: adminMoviePagination.size
+        });
+        if (!cancelled) {
+          setMoviesList(pageData.items);
+          setAdminMoviePagination((prev) => ({
+            ...prev,
+            page: pageData.page,
+            size: pageData.size,
+            totalPages: pageData.totalPages,
+            totalElements: pageData.totalElements
+          }));
+        }
+      } catch (error) {
+        if (!cancelled) {
+          showToast(error.message || 'Không thể tải danh sách phim quản trị.');
+        }
+      }
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+    };
+  }, [isAdmin, activeTab, searchQuery, filmFilter, adminGenreFilter, adminMoviePagination.page, adminMoviePagination.size, setMoviesList]);
+
+  const visibleFoods = [
+    ...foodCombos.map((item) => ({ ...item, kind: 'combo' })),
+    ...foodItems.map((item) => ({ ...item, kind: 'item' }))
+  ].filter((item) => item.name?.toLowerCase().includes(foodSearch.toLowerCase()));
+
+  // Predefined lists of halls and times for quick selection
+  const HALL_OPTIONS = [
+    'Phòng Chiếu Thượng Hạng Gold 01',
+    'Khán Phòng IMAX 3D Theatre',
+    'Phòng Standard Suite 03',
+    'Phòng Trải Nghiệm 4DX Extreme'
+  ];
+
+  const TIME_OPTIONS = [
+    '09:00', '11:30', '14:15', '16:45', '19:15', '21:30', '23:45'
+  ];
+
+  // Sounds configuration
+  const playPulseSound = (frequency = 440, type = 'sine', duration = 0.08) => {
+    try {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) return;
+      const ctx = new AudioContextClass();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(frequency, ctx.currentTime);
+      gain.gain.setValueAtTime(0.04, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + duration);
+    } catch (e) { }
+  };
+
+  // Audit log giờ được backend ghi thật tại mỗi mutation (xem AdminAuditPanel);
+  // giữ hàm no-op để không phải sửa mọi call site cũ.
+  const addAuditLog = () => { };
+
+  const resetFoodForm = () => {
+    setFoodForm({ name: '', description: '', price: '', imageUrl: '', status: 'ACTIVE' });
+    setFoodErrors({});
+    setEditingFood(null);
+    setFoodKind('item');
+  };
+
+  const validateFoodForm = () => {
+    const errors = {};
+    const name = foodForm.name.trim();
+    const description = foodForm.description.trim();
+    const price = Number(foodForm.price);
+    const imageUrl = foodForm.imageUrl.trim();
+
+    if (!name) errors.name = 'Tên món là bắt buộc.';
+    if (name.length > 255) errors.name = 'Tên món tối đa 255 ký tự.';
+    if (description.length > 500) errors.description = 'Mô tả tối đa 500 ký tự.';
+    if (!foodForm.price) errors.price = 'Giá bán là bắt buộc.';
+    if (!Number.isFinite(price) || price <= 0) errors.price = 'Giá bán phải lớn hơn 0.';
+    if (imageUrl.length > 500) errors.imageUrl = 'URL hình ảnh tối đa 500 ký tự.';
+
+    const allFoods = foodKind === 'item' ? foodItems : foodCombos;
+    const duplicate = allFoods.some((item) => (
+      item.name?.trim().toLowerCase() === name.toLowerCase()
+      && !(editingFood && item.id === editingFood.id)
+    ));
+    if (duplicate) errors.name = 'Tên món đã tồn tại trong nhóm đang chọn.';
+
+    setFoodErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const fetchFoods = async () => {
+    const token = getAdminToken();
+    if (!token) {
+      setFoodItems([]);
+      setFoodCombos([]);
+      return;
+    }
+
+    setIsFoodLoading(true);
+    try {
+      const [items, combos] = await Promise.all([
+        adminService.getAdminFoodItems(token),
+        adminService.getAdminFoodCombos(token)
+      ]);
+      setFoodItems(Array.isArray(items) ? items : []);
+      setFoodCombos(Array.isArray(combos) ? combos : []);
+    } catch (error) {
+      const msg = error.message || (targetMovieId ? 'Không thể cập nhật phim.' : 'Không thể tạo phim mới.');
+      setMovieFormError(msg);
+      showToast(msg, 6000, null, 'sad');
+    } finally {
+      setIsFoodLoading(false);
+    }
+  };
+
+  const handleFoodSubmit = async (e) => {
+    e.preventDefault();
+    if (!validateFoodForm()) return;
+
+    const token = getAdminToken();
+    if (!token) return;
+
+    setIsFoodSaving(true);
+    const payload = {
+      name: foodForm.name.trim(),
+      description: foodForm.description.trim(),
+      price: Number(foodForm.price),
+      imageUrl: foodForm.imageUrl.trim(),
+      status: foodForm.status
+    };
+
+    try {
+      const saved = editingFood
+        ? foodKind === 'combo'
+          ? await adminService.updateAdminFoodCombo(token, editingFood.id, payload)
+          : await adminService.updateAdminFoodItem(token, editingFood.id, payload)
+        : foodKind === 'combo'
+          ? await adminService.createAdminFoodCombo(token, payload)
+          : await adminService.createAdminFoodItem(token, payload);
+
+      if (foodKind === 'combo') {
+        setFoodCombos((prev) => editingFood
+          ? prev.map((item) => (item.id === saved.id ? saved : item))
+          : [saved, ...prev]);
+      } else {
+        setFoodItems((prev) => editingFood
+          ? prev.map((item) => (item.id === saved.id ? saved : item))
+          : [saved, ...prev]);
+      }
+
+      addAuditLog(editingFood ? 'Cập nhật bắp nước' : 'Tạo bắp nước', saved.name);
+      showToast(editingFood ? `Đã cập nhật món: ${saved.name}` : `Đã tạo món mới: ${saved.name}`);
+      resetFoodForm();
+      onFoodCatalogChanged();
+    } catch (error) {
+      showToast(error.message || 'Không thể lưu món bắp nước.');
+    } finally {
+      setIsFoodSaving(false);
+    }
+  };
+
+  const handleEditFood = (food, kind) => {
+    setFoodKind(kind);
+    setEditingFood(food);
+    setFoodForm({
+      name: food.name || '',
+      description: food.description || '',
+      price: food.price || '',
+      imageUrl: food.imageUrl || '',
+      status: food.status || 'ACTIVE'
+    });
+    setFoodErrors({});
+  };
+
+  const handleToggleFoodStatus = async (food, kind) => {
+    const nextStatus = food.status === 'OUT_OF_STOCK' ? 'ACTIVE' : 'OUT_OF_STOCK';
+    const token = getAdminToken();
+    if (!token) return;
+
+    const payload = {
+      name: food.name,
+      description: food.description || '',
+      price: Number(food.price),
+      imageUrl: food.imageUrl || '',
+      status: nextStatus
+    };
+
+    try {
+      const saved = kind === 'combo'
+        ? await adminService.updateAdminFoodCombo(token, food.id, payload)
+        : await adminService.updateAdminFoodItem(token, food.id, payload);
+
+      if (kind === 'combo') {
+        setFoodCombos((prev) => prev.map((item) => (item.id === food.id ? saved : item)));
+      } else {
+        setFoodItems((prev) => prev.map((item) => (item.id === food.id ? saved : item)));
+      }
+      showToast(`${nextStatus === 'ACTIVE' ? 'Đã mở bán' : 'Đã đánh dấu hết'} món: ${food.name}`);
+      onFoodCatalogChanged();
+    } catch (error) {
+      showToast(error.message || 'Không thể đổi trạng thái món.');
+    }
+  };
+
+  const getAdminToken = (notify = true) => {
+    const sessionExpiredMessage = 'Phiên quản trị đã hết hạn. Vui lòng đăng nhập lại để tiếp tục.';
+    const { accessToken, user } = getStoredAuth();
+    if (!accessToken) {
+      if (notify) showToast(sessionExpiredMessage);
+      expireAuthSession();
+      return null;
+    }
+
+    const tokenPayload = (() => {
+      try {
+        if (!accessToken.includes('.')) return null;
+        return JSON.parse(atob(accessToken.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+      } catch (error) {
+        return null;
+      }
+    })();
+    const isTokenExpired = tokenPayload?.exp ? tokenPayload.exp * 1000 <= Date.now() : false;
+
+    if (isTokenExpired) {
+      if (notify) showToast(sessionExpiredMessage);
+      expireAuthSession();
+      return null;
+    }
+
+    if (!hasBackendAdminAccess(accessToken, user) && !hasBackendManagerAccess(accessToken, user)) {
+      if (notify) showToast('Tài khoản hiện tại không có quyền quản trị. Vui lòng đăng nhập lại.', 5500, null, 'sad');
+      return null;
+    }
+
+    return accessToken;
+  };
+
+  const handleFoodImageUpload = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    const token = getAdminToken();
+    if (!token) return;
+
+    setIsFoodImageUploading(true);
+    try {
+      const uploaded = await adminService.uploadAdminImage(token, file, 'foods');
+      const uploadedUrl = uploaded?.url || uploaded?.secureUrl || uploaded?.imageUrl || uploaded?.data?.url;
+      if (!uploadedUrl) {
+        throw new Error('Không nhận được URL ảnh từ Storage.');
+      }
+
+      setFoodForm((prev) => ({ ...prev, imageUrl: uploadedUrl }));
+      setFoodErrors((prev) => ({ ...prev, imageUrl: undefined }));
+      showToast('Đã upload ảnh món lên Storage.');
+    } catch (error) {
+      showToast(error.message || 'Không thể upload ảnh món lên Storage.');
+    } finally {
+      setIsFoodImageUploading(false);
+    }
+  };
+
+  const changeAdminSection = (section, options = {}) => {
+    const nextSection = normalizeAdminSection(section);
+    if (isEffectiveAdmin && ['rooms', 'showtimes', 'pricing'].includes(nextSection)) {
+      showToast('Tính năng này đang tạm khóa đối với Quản trị viên (Admin).');
+      return;
+    }
+    if (options?.createWithMovieId) {
+      setHeroBannerInitialMovieId(options.createWithMovieId);
+    }
+    setActiveTab(nextSection);
+    setMobileNavOpen(false);
+    onSectionChange(nextSection);
+    window.history.replaceState(null, '', `${basePath}/${nextSection}`);
+  };
+
+  const validateGenreForm = () => {
+    const errors = {};
+    const name = genreForm.name.trim();
+    const description = genreForm.description.trim();
+
+    if (!name) {
+      errors.name = 'Tên thể loại là bắt buộc.';
+    } else if (name.length > 100) {
+      errors.name = 'Tên thể loại tối đa 100 ký tự.';
+    }
+
+    if (!description) {
+      errors.description = 'Nội dung mô tả là bắt buộc.';
+    } else if (description.length < 50) {
+      errors.description = 'Nội dung mô tả cần tối thiểu 50 ký tự.';
+    } else if (description.length > 1000) {
+      errors.description = 'Nội dung mô tả phải dưới 1000 ký tự.';
+    }
+
+    const isDuplicate = genres.some((genre) => {
+      const sameName = genre.name?.trim().toLowerCase() === name.toLowerCase();
+      const isSameRecord = editingGenreId && genre.id === editingGenreId;
+      return sameName && !isSameRecord;
+    });
+
+    if (name && isDuplicate) {
+      errors.name = 'Tên thể loại đã tồn tại trong danh sách hiện tại.';
+    }
+
+    setGenreErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const fetchGenres = async (page = 0) => {
+    const token = getAdminToken();
+    if (!token) return;
+
+    setIsGenreLoading(true);
+    try {
+      const data = await adminService.getAdminGenres({ page, size: 10 });
+      const genreList = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : [];
+      setGenres(genreList);
+      if (data && !Array.isArray(data)) {
+        setGenrePagination({
+          page: data.page ?? page,
+          size: data.size ?? 10,
+          totalPages: data.totalPages ?? 1,
+          totalItems: data.totalItems ?? genreList.length
+        });
+      }
+    } catch (error) {
+      showToast(error.message || 'Không thể tải danh sách thể loại phim.');
+    } finally {
+      setIsGenreLoading(false);
+    }
+  };
+
+  const fetchActors = async (
+    keyword = '',
+    page = 0,
+    size = activeTab === 'actors' ? actorPagination.size : 100,
+    syncPagination = activeTab === 'actors'
+  ) => {
+    const token = getAdminToken();
+    if (!token) return;
+
+    setIsActorLoading(true);
+    try {
+      const data = await adminService.getAdminActorsPage(token, { keyword: keyword.trim(), page, size });
+      const actorList = Array.isArray(data?.items) ? data.items : Array.isArray(data) ? data : [];
+      setActors(actorList);
+      if (syncPagination && data && !Array.isArray(data)) {
+        setActorPagination({
+          page: data.page ?? page,
+          size: data.size ?? size,
+          totalPages: data.totalPages ?? 1,
+          totalItems: data.totalItems ?? actorList.length
+        });
+      }
+    } catch (error) {
+      showToast(error.message || 'Không thể tải danh sách diễn viên.');
+    } finally {
+      setIsActorLoading(false);
+    }
+  };
+
+  const fetchAdminUsers = async () => {
+    const token = getAdminToken();
+    if (!token) return;
+
+    setIsUsersLoading(true);
+    try {
+      const params = isEffectiveManager ? { role: 'STAFF' } : {};
+      const data = await adminService.getAdminUsers(token, params);
+      const users = Array.isArray(data) ? data : [];
+      setAdminUsers(users);
+      setSelectedAdminUser((prev) => {
+        if (!prev) return users[0] || null;
+        return users.find((user) => String(user.id) === String(prev.id)) || users[0] || null;
+      });
+    } catch (error) {
+      showToast(error.message || 'Không thể tải danh sách người dùng.');
+    } finally {
+      setIsUsersLoading(false);
+    }
+  };
+
+  const handleSelectAdminUser = async (userOrId) => {
+    if (!userOrId) {
+      setSelectedAdminUser(null);
+      return;
+    }
+
+    const userId = typeof userOrId === 'object' ? (userOrId.id ?? userOrId.userId) : userOrId;
+
+    if (typeof userOrId === 'object' && userOrId.id) {
+      setSelectedAdminUser(userOrId);
+    }
+
+    const token = getAdminToken();
+    if (!token || !userId) return;
+
+    setIsUserDetailLoading(true);
+    try {
+      const user = await adminService.getAdminUserDetail(token, userId);
+      if (user) {
+        setSelectedAdminUser(user);
+      }
+    } catch (error) {
+      showToast(error.message || 'Kh�ng th? t?i chi ti?t ngu?i d�ng.');
+    } finally {
+      setIsUserDetailLoading(false);
+    }
+  };
+
+  const handleCreateStaff = async (payload) => {
+    const token = getAdminToken();
+    if (!token) return null;
+
+    setIsStaffCreating(true);
+    try {
+      const createdStaff = await adminService.createAdminStaff(token, payload);
+      setAdminUsers((prev) => [createdStaff, ...prev.filter((user) => String(user.id) !== String(createdStaff.id))]);
+      setSelectedAdminUser(createdStaff);
+      addAuditLog('Cấp tài khoản STAFF', createdStaff.email);
+      showToast(`Đã cấp tài khoản STAFF cho ${createdStaff.email}.`);
+      return createdStaff;
+    } catch (error) {
+      showToast(error.message || 'Không thể cấp tài khoản STAFF.');
+      throw error;
+    } finally {
+      setIsStaffCreating(false);
+    }
+  };
+
+  const handleUpdateAdminUserStatus = async (userId, status) => {
+    const isCurrentAdmin =
+      String(currentUser?.id || '') === String(userId || '') ||
+      (selectedAdminUser?.email && currentUser?.email && selectedAdminUser.email === currentUser.email);
+
+    if (isCurrentAdmin) {
+      showToast('Không thể đổi trạng thái của chính tài khoản admin đang đăng nhập.');
+      return;
+    }
+
+    const token = getAdminToken();
+    if (!token) return;
+
+    setIsUserStatusSaving(true);
+    try {
+      const updatedUser = await adminService.updateAdminUserStatus(token, userId, status);
+      setAdminUsers((prev) => prev.map((user) => (
+        String(user.id) === String(userId) ? updatedUser : user
+      )));
+      setSelectedAdminUser(updatedUser);
+      addAuditLog('Cập nhật trạng thái người dùng', `${updatedUser.email} -> ${updatedUser.status}`);
+      showToast(`Đã đổi trạng thái ${updatedUser.email} thành ${updatedUser.status}.`);
+    } catch (error) {
+      showToast(error.message || 'Không thể đổi trạng thái người dùng.');
+    } finally {
+      setIsUserStatusSaving(false);
+    }
+  };
+
+  React.useEffect(() => {
+    let nextSection = normalizeAdminSection(initialSection);
+    if (!isAdmin && nextSection === 'cinema') {
+      nextSection = 'overview';
+    }
+    if (isAdmin && nextSection === 'staff') {
+      nextSection = 'users';
+    }
+    if (isEffectiveAdmin && ['rooms', 'showtimes', 'pricing'].includes(nextSection)) {
+      nextSection = 'overview';
+    }
+    setActiveTab(nextSection);
+    setOpenNavGroup(getNavGroup(nextSection));
+    if (nextSection !== initialSection) {
+      onSectionChange(nextSection);
+      window.history.replaceState(null, '', `${basePath}/${nextSection}`);
+    }
+  }, [initialSection, isAdmin, basePath, isEffectiveAdmin]);
+  React.useEffect(() => {
+    if (activeTab === 'genres') {
+      fetchGenres();
+    } else if (activeTab === 'foods') {
+      fetchFoods();
+    } else if (activeTab === 'users' || activeTab === 'staff') {
+      fetchAdminUsers();
+    }
+  }, [activeTab]);
+
+  React.useEffect(() => {
+    if (showMovieForm) {
+      if (genres.length === 0) fetchGenres();
+      if (actors.length === 0) fetchActors('', 0, 100, false);
+    }
+  }, [showMovieForm]);
+
+  React.useEffect(() => {
+    if (activeTab !== 'actors') return undefined;
+    const timeoutId = setTimeout(() => {
+      fetchActors(actorSearch, actorPagination.page, actorPagination.size, true);
+    }, 300);
+    return () => clearTimeout(timeoutId);
+  }, [activeTab, actorSearch, actorPagination.page, actorPagination.size]);
+
+  const resetGenreForm = () => {
+    setGenreForm({ name: '', description: '' });
+    setGenreErrors({});
+    setEditingGenreId(null);
+  };
+
+  const resetActorForm = () => {
+    setActorForm({ name: '', biography: '', avatarUrl: '' });
+    setActorErrors({});
+    setEditingActorId(null);
+  };
+
+  const validateActorForm = () => {
+    const errors = {};
+    const name = actorForm.name.trim();
+    if (!name) errors.name = 'Tên diễn viên là bắt buộc.';
+    else if (name.length > 50) errors.name = 'Tên diễn viên tối đa 50 ký tự.';
+    if (actorForm.biography.length > 1000) errors.biography = 'Tiểu sử tối đa 1000 ký tự.';
+    if (actorForm.avatarUrl.length > 500) errors.avatarUrl = 'Avatar URL tối đa 500 ký tự.';
+    if (actors.some((actor) => (
+      actor.name?.trim().toLowerCase() === name.toLowerCase() &&
+      String(actor.id) !== String(editingActorId)
+    ))) {
+      errors.name = 'Tên diễn viên đã tồn tại.';
+    }
+    setActorErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const handleActorSubmit = async (event) => {
+    event.preventDefault();
+    if (!validateActorForm()) return;
+    const token = getAdminToken();
+    if (!token) return;
+
+    setIsActorSaving(true);
+    const payload = {
+      name: actorForm.name.trim(),
+      biography: actorForm.biography.trim(),
+      avatarUrl: actorForm.avatarUrl.trim()
+    };
+    try {
+      const savedActor = editingActorId
+        ? await adminService.updateAdminActor(token, editingActorId, payload)
+        : await adminService.createAdminActor(token, payload);
+      if (activeTab === 'actors') {
+        const nextPage = editingActorId ? actorPagination.page : 0;
+        setActorPagination((prev) => ({ ...prev, page: nextPage }));
+        await fetchActors(actorSearch, nextPage, actorPagination.size, true);
+      } else {
+        setActors((prev) => editingActorId
+          ? prev.map((actor) => String(actor.id) === String(editingActorId) ? savedActor : actor)
+          : [savedActor, ...prev]);
+      }
+      addAuditLog(editingActorId ? 'Cập nhật diễn viên' : 'Tạo diễn viên', savedActor.name);
+      showToast(editingActorId ? `Đã cập nhật diễn viên: ${savedActor.name}` : `Đã tạo diễn viên: ${savedActor.name}`);
+      resetActorForm();
+    } catch (error) {
+      showToast(error.message || 'Không thể lưu diễn viên.');
+    } finally {
+      setIsActorSaving(false);
+    }
+  };
+
+  const handleEditActor = (actor) => {
+    setEditingActorId(actor.id);
+    setActorForm({
+      name: actor.name || '',
+      biography: actor.biography || '',
+      avatarUrl: actor.avatarUrl || ''
+    });
+    setActorErrors({});
+  };
+
+  const performDeleteActor = async (actor) => {
+    const token = getAdminToken();
+    if (!token) return;
+    try {
+      await adminService.deleteAdminActor(token, actor.id);
+      if (activeTab === 'actors') {
+        const nextTotalItems = Math.max(0, actorPagination.totalItems - 1);
+        const nextLastPage = Math.max(0, Math.ceil(nextTotalItems / actorPagination.size) - 1);
+        const nextPage = Math.min(actorPagination.page, nextLastPage);
+        setActorPagination((prev) => ({ ...prev, page: nextPage }));
+        await fetchActors(actorSearch, nextPage, actorPagination.size, true);
+      } else {
+        setActors((prev) => prev.filter((item) => String(item.id) !== String(actor.id)));
+      }
+      addAuditLog('Xóa diễn viên', actor.name);
+      showToast(`Đã xóa diễn viên: ${actor.name}`);
+      if (String(editingActorId) === String(actor.id)) resetActorForm();
+    } catch (error) {
+      showToast(error.message || 'Không thể xóa diễn viên đang được sử dụng trong phim.');
+    }
+  };
+
+  const handleDeleteActor = (actor) => {
+    showToast(`Bạn có chắc muốn xóa diễn viên "${actor.name}"?`, 9000, {
+      label: 'Xóa',
+      onClick: () => performDeleteActor(actor)
+    });
+  };
+
+  const handleGenreSubmit = async (e) => {
+    e.preventDefault();
+    if (!validateGenreForm()) return;
+
+    const token = getAdminToken();
+    if (!token) return;
+
+    setIsGenreSaving(true);
+    const payload = {
+      name: genreForm.name.trim(),
+      description: genreForm.description.trim()
+    };
+
+    try {
+      const savedGenre = editingGenreId
+        ? await adminService.updateAdminGenre(token, editingGenreId, payload)
+        : await adminService.createAdminGenre(token, payload);
+
+      addAuditLog(editingGenreId ? 'Cập nhật thể loại phim' : 'Tạo thể loại phim', savedGenre.name);
+      showToast(editingGenreId ? `Đã cập nhật thể loại: ${savedGenre.name}` : `Đã tạo thể loại mới: ${savedGenre.name}`);
+      resetGenreForm();
+      await fetchGenres(0);
+    } catch (error) {
+      showToast(error.message || 'Không thể lưu thể loại phim.');
+    } finally {
+      setIsGenreSaving(false);
+    }
+  };
+
+  const handleEditGenre = (genre) => {
+    setEditingGenreId(genre.id);
+    setGenreForm({
+      name: genre.name || '',
+      description: genre.description || ''
+    });
+    setGenreErrors({});
+  };
+
+  const performDeleteGenre = async (genre) => {
+    const token = getAdminToken();
+    if (!token) return;
+
+    try {
+      await adminService.deleteAdminGenre(token, genre.id);
+      addAuditLog('Xóa thể loại phim', genre.name);
+      showToast(`Đã xóa thể loại: ${genre.name}`);
+      if (editingGenreId === genre.id) resetGenreForm();
+      // Reload trang hiện tại; nếu page bị rỗng thì lùi 1 trang
+      const currentPage = genrePagination.page;
+      const isLastOnPage = genres.length === 1 && currentPage > 0;
+      await fetchGenres(isLastOnPage ? currentPage - 1 : currentPage);
+    } catch (error) {
+      showToast(error.message || 'Không thể xóa thể loại phim.');
+    }
+  };
+
+  const handleDeleteGenre = (genre) => {
+    showToast(`Bạn có chắc muốn xóa thể loại "${genre.name}" khỏi hệ thống?`, 9000, {
+      label: 'Xóa',
+      onClick: () => performDeleteGenre(genre)
+    });
+  };
+
+  // Quản lý thông tin rạp phân công cho Manager / Hệ thống rạp cho Admin
+  const [assignedCinema, setAssignedCinema] = useState(null);
+
+  // Manager restricted tabs list (RBAC Matrix)
+  const MANAGER_ALLOWED_TABS = [
+    'overview',
+    'rooms',
+    'showtimes',
+    'pricing',
+    'showtime-incidents',
+    'tickets',
+    'reviews',
+    'staff',
+    'loyalty',
+    'fnb-report',
+    'statistics'
+  ];
+
+  useEffect(() => {
+    if (isEffectiveManager && !MANAGER_ALLOWED_TABS.includes(activeTab)) {
+      changeAdminSection('overview');
+    }
+    if (!isEffectiveManager && activeTab === 'showtime-incidents') {
+      changeAdminSection('overview');
+    }
+  }, [activeTab, isEffectiveManager]);
+
+  useEffect(() => {
+    const token = getAdminToken(false);
+    if (!token) return;
+    let cancelled = false;
+    adminService.getAdminCinemas(token)
+      .then((res) => {
+        if (cancelled) return;
+        const list = Array.isArray(res) ? res : (res?.items || res?.content || []);
+        if (list && list.length > 0) {
+          const target = currentUser?.cinemaId
+            ? (list.find((c) => String(c.id) === String(currentUser.cinemaId)) || list[0])
+            : list[0];
+          setAssignedCinema(target);
+        }
+      })
+      .catch((e) => {
+        console.warn('Lỗi lấy thông tin cụm rạp phân công:', e);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser?.cinemaId]);
+
+  const normalizeDateInput = (value) => {
+    if (!value) return '';
+    const match = String(value).match(/^\d{4}-\d{2}-\d{2}/);
+    return match ? match[0] : String(value);
+  };
+
+  const resolveMovieId = (movie) => movie?.backendId ?? movie?.id ?? movie?.raw?.id ?? movie?.raw?.movieId;
+  const hasReleaseDatePassed = (value) => {
+    if (!value) return false;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const releaseDate = new Date(value);
+    releaseDate.setHours(0, 0, 0, 0);
+    return !Number.isNaN(releaseDate.getTime()) && releaseDate < today;
+  };
+  const resolveMovieStatusFromDates = (releaseDateValue, endDateValue) => {
+    const releaseDate = new Date(releaseDateValue);
+    const endDate = new Date(endDateValue);
+    const today = new Date();
+    releaseDate.setHours(0, 0, 0, 0);
+    endDate.setHours(0, 0, 0, 0);
+    today.setHours(0, 0, 0, 0);
+    if (Number.isNaN(releaseDate.getTime()) || Number.isNaN(endDate.getTime())) return 'UPCOMING';
+    if (today < releaseDate) return 'UPCOMING';
+    if (today > endDate) return 'ENDED';
+    return 'NOW_SHOWING';
+  };
+  const movieStatusRank = (status) => ({ UPCOMING: 0, NOW_SHOWING: 1, ENDED: 2 }[String(status || '').toUpperCase()] ?? -1);
+  const isInvalidMovieStatusTransition = (movie, requestedStatus) => {
+    if (requestedStatus === 'INACTIVE' || !hasReleaseDatePassed(movie?.releaseDate)) return false;
+    if (requestedStatus === 'UPCOMING') return true;
+    const currentRank = movieStatusRank(movie?.status);
+    const requestedRank = movieStatusRank(requestedStatus);
+    return currentRank >= 0 && requestedRank >= 0 && requestedRank < currentRank;
+  };
+
+  const resolveGenreIdsForMovie = (movie) => {
+    const raw = movie?.raw || movie || {};
+    const ids = [];
+    const names = [];
+
+    const pushId = (value) => {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) ids.push(parsed);
+    };
+
+    if (Array.isArray(raw.genreIds)) {
+      raw.genreIds.forEach(pushId);
+    }
+
+    if (Array.isArray(raw.genres)) {
+      raw.genres.forEach((item) => {
+        if (typeof item === 'string') {
+          names.push(item);
+        } else if (item && typeof item === 'object') {
+          if (item.id !== undefined || item.genreId !== undefined) {
+            pushId(item.id ?? item.genreId);
+          } else if (item.name) {
+            names.push(item.name);
+          }
+        }
+      });
+    }
+
+    if (!ids.length && Array.isArray(raw.genre)) {
+      raw.genre.forEach((item) => {
+        if (typeof item === 'string') {
+          names.push(item);
+        } else if (item && typeof item === 'object') {
+          if (item.id !== undefined || item.genreId !== undefined) {
+            pushId(item.id ?? item.genreId);
+          } else if (item.name) {
+            names.push(item.name);
+          }
+        }
+      });
+    }
+
+    if (!ids.length && typeof raw.genre === 'string') {
+      names.push(...raw.genre.split(','));
+    }
+
+    if (!ids.length && Array.isArray(movie?.genre)) {
+      names.push(...movie.genre);
+    }
+
+    if (ids.length) {
+      return Array.from(new Set(ids));
+    }
+
+    const nameLookup = new Map(
+      genres
+        .filter((genre) => genre?.name)
+        .map((genre) => [genre.name.trim().toLowerCase(), Number(genre.id)])
+    );
+    const mapped = names
+      .map((name) => String(name || '').trim().toLowerCase())
+      .filter(Boolean)
+      .map((name) => nameLookup.get(name))
+      .filter((value) => Number.isFinite(value));
+
+    return Array.from(new Set(mapped));
+  };
+
+  const resetMovieForm = () => {
+    setFormData(buildDefaultMovieForm());
+    setEditingMovie(null);
+  };
+
+  const populateMovieForm = (movie) => {
+    setMovieFormError(null);
+    const defaultForm = buildDefaultMovieForm();
+    const genreIds = resolveGenreIdsForMovie(movie);
+    const genreNames = genreIds.length
+      ? genres
+        .filter((genre) => genreIds.includes(Number(genre.id)))
+        .map((genre) => genre.name)
+        .join(', ')
+      : Array.isArray(movie?.genre)
+        ? movie.genre.join(', ')
+        : String(movie?.genre || '');
+
+    setEditingMovie(movie);
+    setFormData({
+      ...defaultForm,
+      id: resolveMovieId(movie),
+      backendId: resolveMovieId(movie),
+      title: movie?.title || defaultForm.title,
+      englishTitle: movie?.englishTitle || defaultForm.englishTitle,
+      genre: genreNames,
+      genreIds,
+      duration: Number(movie?.duration ?? movie?.durationMinutes ?? defaultForm.duration),
+      ageRating: movie?.ageRating || defaultForm.ageRating,
+      director: movie?.director || defaultForm.director,
+      synopsis: movie?.synopsis || movie?.description || movie?.raw?.description || defaultForm.synopsis,
+      trailerUrl: movie?.trailerUrl || defaultForm.trailerUrl,
+      language: movie?.language || defaultForm.language,
+      subtitleLanguage: movie?.subtitleLanguage || movie?.raw?.subtitleLanguage || defaultForm.subtitleLanguage,
+      status: movie?.status || defaultForm.status,
+      castList: movie?.castList || movie?.raw?.castList || movie?.cast || defaultForm.castList,
+      actorIds: Array.isArray(movie?.actorIds)
+        ? movie.actorIds.map(Number).filter(Number.isFinite)
+        : Array.isArray(movie?.actors)
+          ? movie.actors.map((actor) => Number(actor.id ?? actor.actorId)).filter(Number.isFinite)
+          : Array.isArray(movie?.raw?.actors)
+            ? movie.raw.actors.map((actor) => Number(actor.id ?? actor.actorId)).filter(Number.isFinite)
+            : defaultForm.actorIds,
+      mainActorIds: Array.isArray(movie?.mainActorIds)
+        ? movie.mainActorIds.map(Number).filter(Number.isFinite)
+        : Array.isArray(movie?.raw?.mainActorIds)
+          ? movie.raw.mainActorIds.map(Number).filter(Number.isFinite)
+          : defaultForm.mainActorIds,
+      posterUrl: movie?.posterUrl || defaultForm.posterUrl,
+      bannerUrl: movie?.bannerUrl || defaultForm.bannerUrl,
+      releaseDate: normalizeDateInput(movie?.releaseDate) || defaultForm.releaseDate,
+      endDate: normalizeDateInput(movie?.endDate || movie?.raw?.endDate) || defaultForm.endDate
+    });
+    setShowMovieForm(true);
+  };
+
+  const handleEditMovie = async (movie) => {
+    const movieId = resolveMovieId(movie);
+    const token = getAdminToken();
+    if (!token || !movieId) return;
+
+    setIsMovieSaving(true);
+    try {
+      const detail = await adminService.getAdminMovieDetail(token, movieId);
+      populateMovieForm({ ...movie, ...detail });
+    } catch (error) {
+      showToast(error.message || 'Không thể tải chi tiết phim quản trị.');
+    } finally {
+      setIsMovieSaving(false);
+    }
+  };
+
+  const handleCreateMovieSubmit = async (e) => {
+    e.preventDefault();
+    playPulseSound(587.33, 'sine', 0.2); // D5 success note
+
+    const token = getAdminToken();
+    if (!token) return;
+
+    let targetMovieId = editingMovie ? resolveMovieId(editingMovie) : (formData.backendId || formData.id || null);
+
+    const trimmedTitle = String(formData.title || '').trim().toLowerCase();
+    if (!trimmedTitle) {
+      showToast('Vui lòng nhập tên phim.');
+      return;
+    }
+
+    // If not explicitly editing by ID, check if an existing movie with the exact same title already exists in the library
+    if (!targetMovieId) {
+      const existingMatch = (moviesList || []).find(
+        (m) => String(m.title || '').trim().toLowerCase() === trimmedTitle
+      );
+      if (existingMatch) {
+        targetMovieId = resolveMovieId(existingMatch);
+      }
+    }
+
+    const hasDuplicateTitle = (moviesList || []).some((m) => {
+      const mId = resolveMovieId(m);
+      if (targetMovieId && String(mId) === String(targetMovieId)) return false;
+      return String(m.title || '').trim().toLowerCase() === trimmedTitle;
+    });
+    if (hasDuplicateTitle) {
+      showToast('Tên phim đã tồn tại trong hệ thống. Vui lòng chọn tên khác!');
+      return;
+    }
+
+    {
+      if (!formData.releaseDate || !formData.endDate) {
+        showToast('Vui lòng chọn ngày phát hành và ngày kết thúc trước khi đăng phim.');
+        return;
+      }
+      if (new Date(formData.endDate) < new Date(formData.releaseDate)) {
+        showToast('Ngày kết thúc phải bằng hoặc sau ngày phát hành.');
+        return;
+      }
+      if (!String(formData.posterUrl || '').trim()) {
+        showToast('Vui lòng upload ảnh poster trước khi đăng phim.');
+        return;
+      }
+      if (!String(formData.synopsis || '').trim()) {
+        showToast('Vui lòng nhập nội dung phim trước khi đăng phim.');
+        return;
+      }
+      if (!formData.genreIds || formData.genreIds.length === 0) {
+        showToast('Vui lòng chọn ít nhất một thể loại phim trước khi đăng phim.');
+        return;
+      }
+    }
+
+    const computedStatus = (formData.releaseDate && formData.endDate)
+      ? resolveMovieStatusFromDates(formData.releaseDate, formData.endDate)
+      : 'UPCOMING';
+
+    const payload = {
+      title: formData.title.trim().toLocaleUpperCase('vi-VN'),
+      englishTitle: (formData.englishTitle || '').trim(),
+      description: (formData.synopsis || '').trim(),
+      trailerUrl: (formData.trailerUrl || '').trim(),
+      posterUrl: (formData.posterUrl || '').trim(),
+      avatarUrl: (formData.bannerUrl || '').trim(),
+      durationMinutes: Number(formData.duration) || 120,
+      releaseDate: formData.releaseDate || null,
+      endDate: formData.endDate || null,
+      language: (formData.language || 'Tiếng Việt').trim(),
+      subtitleLanguage: (formData.subtitleLanguage || 'EN Sub').trim(),
+      status: computedStatus,
+      ageRating: formData.ageRating || 'P',
+      director: (formData.director || '').trim(),
+      genreIds: (formData.genreIds || []).map((id) => Number(id)),
+      actorIds: (formData.actorIds || []).map(Number).filter(Number.isFinite),
+      mainActorIds: (formData.mainActorIds || []).map(Number).filter(Number.isFinite)
+    };
+
+    const isUpdating = Boolean(targetMovieId);
+    if (isUpdating && editingMovie?.status && editingMovie.status !== 'UPCOMING') {
+      const statusText = editingMovie.status === 'NOW_SHOWING' ? 'Đang chiếu (NOW_SHOWING)' : editingMovie.status === 'ENDED' ? 'Đã kết thúc (ENDED)' : editingMovie.status;
+      const warningMsg = `Chỉ phim sắp chiếu mới có thể cập nhật. Phim hiện tại đang ở trạng thái "${statusText}".`;
+      setMovieFormError(warningMsg);
+      showToast(warningMsg, 6000, null, 'sad');
+      return;
+    }
+
+    setIsMovieSaving(true);
+    try {
+      const savedMovie = isUpdating
+        ? await adminService.updateAdminMovie(token, targetMovieId, payload)
+        : await adminService.createAdminMovie(token, payload);
+
+      setMoviesList((prev) => {
+        if (isUpdating) {
+          return prev.map((item) => {
+            const itemId = resolveMovieId(item);
+            return String(itemId) === String(targetMovieId) ? savedMovie : item;
+          });
+        }
+        return [savedMovie, ...prev];
+      });
+
+      if (!isUpdating) {
+        setAdminMoviePagination((prev) => ({ ...prev, totalElements: prev.totalElements + 1 }));
+      }
+      addAuditLog(isUpdating ? 'Cập nhật phim' : 'Thêm phim mới', savedMovie.title);
+
+      resetMovieForm();
+      setShowMovieForm(false);
+      showToast(isUpdating
+        ? `Đã cập nhật và đăng phim: ${savedMovie.title}`
+        : `Đã đăng phim mới: ${savedMovie.title}`);
+    } catch (error) {
+      showToast(error.message || (targetMovieId ? 'Không thể cập nhật phim.' : 'Không thể tạo phim mới.'));
+    } finally {
+      setIsMovieSaving(false);
+    }
+  };
+
+  const handleSubmitMovieForApproval = async (movie) => {
+    const movieId = resolveMovieId(movie);
+    const token = getAdminToken();
+    if (!token || !movieId) return;
+    try {
+      const updated = await adminService.submitAdminMovie(token, movieId);
+      setMoviesList((prev) => prev.map((m) => resolveMovieId(m) === movieId ? updated : m));
+      addAuditLog('Gửi duyệt phim', updated.title);
+      showToast(`Đã gửi phim "${updated.title}" chờ duyệt thành công!`);
+    } catch (err) {
+      showToast(err.message || 'Không thể gửi duyệt phim.');
+    }
+  };
+
+  const handleWithdrawMovieApproval = async (movie) => {
+    const movieId = resolveMovieId(movie);
+    const token = getAdminToken();
+    if (!token || !movieId) return;
+    try {
+      const updated = await adminService.withdrawAdminMovie(token, movieId);
+      setMoviesList((prev) => prev.map((m) => resolveMovieId(m) === movieId ? updated : m));
+      addAuditLog('Rút yêu cầu duyệt phim', updated.title);
+      showToast(`Đã rút yêu cầu duyệt phim "${updated.title}". Phim đã chuyển về Bản nháp.`);
+    } catch (err) {
+      showToast(err.message || 'Không thể rút yêu cầu duyệt.');
+    }
+  };
+
+  const handleApproveMovie = async (movie, note = '') => {
+    const movieId = resolveMovieId(movie);
+    const token = getAdminToken();
+    if (!token || !movieId) return;
+    try {
+      const updated = await adminService.approveAdminMovie(token, movieId, note);
+      setMoviesList((prev) => prev.map((m) => resolveMovieId(m) === movieId ? updated : m));
+      addAuditLog('Duyệt phim', updated.title);
+      showToast(`Đã phê duyệt phim "${updated.title}" thành công! Bây giờ bạn có thể tạo suất chiếu hoặc xuất bản phim.`);
+    } catch (err) {
+      showToast(err.message || 'Không thể duyệt phim.');
+    }
+  };
+
+  const handleRejectMovie = async (movie, reason) => {
+    const movieId = resolveMovieId(movie);
+    const token = getAdminToken();
+    if (!token || !movieId) return;
+    if (!reason || !reason.trim()) {
+      showToast('Bắt buộc phải nhập lý do từ chối!');
+      return;
+    }
+    try {
+      const updated = await adminService.rejectAdminMovie(token, movieId, reason.trim());
+      setMoviesList((prev) => prev.map((m) => resolveMovieId(m) === movieId ? updated : m));
+      addAuditLog('Từ chối duyệt phim', `${updated.title}: ${reason.trim()}`);
+      showToast(`Đã từ chối phim "${updated.title}".`);
+    } catch (err) {
+      showToast(err.message || 'Không thể từ chối phim.');
+    }
+  };
+
+  const handlePublishMovie = async (movie) => {
+    const movieId = resolveMovieId(movie);
+    const token = getAdminToken();
+    if (!token || !movieId) return;
+    try {
+      const updated = await adminService.publishAdminMovie(token, movieId);
+      setMoviesList((prev) => prev.map((m) => resolveMovieId(m) === movieId ? updated : m));
+      addAuditLog('Xuất bản phim', updated.title);
+      showToast(`Đã xuất bản phim "${updated.title}" lên website công khai!`);
+    } catch (err) {
+      showToast(err.message || 'Không thể xuất bản phim.');
+    }
+  };
+
+  const handleUnpublishMovie = async (movie) => {
+    const movieId = resolveMovieId(movie);
+    const token = getAdminToken();
+    if (!token || !movieId) return;
+    try {
+      const updated = await adminService.unpublishAdminMovie(token, movieId);
+      setMoviesList((prev) => prev.map((m) => resolveMovieId(m) === movieId ? updated : m));
+      addAuditLog('Gỡ xuất bản phim', updated.title);
+      showToast(`Đã gỡ xuất bản phim "${updated.title}" khỏi website.`);
+    } catch (err) {
+      showToast(err.message || 'Không thể gỡ xuất bản phim.');
+    }
+  };
+
+  const handleArchiveMovie = async (movie) => {
+    const movieId = resolveMovieId(movie);
+    const token = getAdminToken();
+    if (!token || !movieId) return;
+    try {
+      const updated = await adminService.archiveAdminMovie(token, movieId);
+      setMoviesList((prev) => prev.map((m) => resolveMovieId(m) === movieId ? updated : m));
+      addAuditLog('Lưu trữ phim', updated.title);
+      showToast(`Đã đưa phim "${updated.title}" vào lưu trữ.`);
+    } catch (err) {
+      showToast(err.message || 'Không thể lưu trữ phim.');
+    }
+  };
+
+  const handleUnarchiveMovie = async (movie) => {
+    const movieId = resolveMovieId(movie);
+    const token = getAdminToken();
+    if (!token || !movieId) return;
+    try {
+      const updated = await adminService.unarchiveAdminMovie(token, movieId);
+      setMoviesList((prev) => prev.map((m) => resolveMovieId(m) === movieId ? updated : m));
+      addAuditLog('Khôi phục phim', updated.title);
+      showToast(`Đã khôi phục phim "${updated.title}" từ lưu trữ.`);
+    } catch (err) {
+      showToast(err.message || 'Không thể khôi phục phim.');
+    }
+  };
+
+  const handleFetchApprovalHistory = async (movieId) => {
+    const token = getAdminToken();
+    if (!token || !movieId) return [];
+    try {
+      return await adminService.getAdminMovieApprovalHistory(token, movieId);
+    } catch (err) {
+      showToast(err.message || 'Không thể tải lịch sử duyệt.');
+      return [];
+    }
+  };
+
+  const handleDeleteMovie = (movie) => {
+    const movieId = resolveMovieId(movie);
+    const title = movie?.title || movie?.name || 'phim này';
+    const isArchived = movie.publicationStatus === 'ARCHIVED';
+
+    if (!isArchived) {
+      showToast(`Phim "${title}" không thể xóa vĩnh viễn trực tiếp. Vui lòng đưa phim vào lưu trữ trước.`, 8000, {
+        label: 'Đưa vào lưu trữ',
+        onClick: async () => {
+          handleArchiveMovie(movie);
+        }
+      });
+      return;
+    }
+
+    showToast(`Xác nhận xóa vĩnh viễn phim "${title}" khỏi hệ thống? Thao tác này không thể hoàn tác.`, 8000, {
+      label: 'Xóa vĩnh viễn',
+      onClick: async () => {
+        const token = getAdminToken();
+        if (!token || !movieId) return;
+        try {
+          await adminService.deleteAdminMovie(token, movieId);
+          setMoviesList((prev) => prev.filter((m) => resolveMovieId(m) !== movieId));
+          setAdminMoviePagination((prev) => ({ ...prev, totalElements: Math.max(0, prev.totalElements - 1) }));
+          addAuditLog('Xóa vĩnh viễn phim', title);
+          showToast(`Đã xóa vĩnh viễn phim "${title}".`);
+        } catch (err) {
+          showToast(err.message || 'Không thể xóa vĩnh viễn phim.');
+        }
+      }
+    });
+  };
+
+  const handleUpdateMovieStatus = async (movie, status) => {
+    const movieId = resolveMovieId(movie);
+    const token = getAdminToken();
+    if (!token || !movieId || !status || status === movie.status) return;
+    if (isInvalidMovieStatusTransition(movie, status)) {
+      showToast('Phim đã qua ngày phát hành nên không thể chuyển ngược trạng thái.');
+      return;
+    }
+
+    try {
+      const updatedMovie = await adminService.updateAdminMovieStatus(token, movieId, status);
+      setMoviesList((prev) => prev.map((item) => (
+        String(resolveMovieId(item)) === String(movieId) ? updatedMovie : item
+      )));
+      addAuditLog('Cập nhật trạng thái phim', `${updatedMovie.title} -> ${status}`);
+      showToast(`Đã đổi trạng thái phim "${updatedMovie.title}" thành ${status}.`);
+    } catch (error) {
+      showToast(error.message || 'Không thể đổi trạng thái phim.');
+    }
+  };
+
+  const handleAddShowtimeSubmit = (e) => {
+    e.preventDefault();
+    playPulseSound(659.25, 'sine', 0.15); // E5 note
+
+    const targetMovie = moviesList.find(m => m.id === newShowtime.movieId);
+    if (!targetMovie) {
+      showToast("Suất chiếu cần tham chiếu một mã phim cụ thể.");
+      return;
+    }
+
+    setShowtimeSuccessMessage(`Kích hoạt thành công suất chiếu mới của tác phẩm: ${targetMovie.title}`);
+    addAuditLog('Phát phối suất chiếu mới', `${targetMovie.title} tại ${assignedCinema?.name || publicCinema?.name || 'rạp chiếu'}`);
+
+    setTimeout(() => {
+      setShowtimeSuccessMessage('');
+      setIsAddingShowtime(false);
+    }, 2800);
+  };
+
+  const handleRefundTicket = (ticketId, customerName) => {
+    showToast(`Xác nhận bồi hoàn vé [${ticketId}] của khách hàng [${customerName}]? Ghế đã chọn sẽ được hoàn trả lại rạp chiếu.`, 9000, {
+      label: 'Hoàn tiền',
+      onClick: () => {
+        playPulseSound(293.66, 'sine', 0.3);
+        setBookedTickets(prev => prev.filter(t => t.ticketId !== ticketId));
+        addAuditLog('Hoàn tiền giao dịch', `Mã vé ${ticketId}`);
+        showToast(`Đã hoàn thành thủ tục hủy vé và hoàn trả tiền cho khách hàng ${customerName}.`);
+      }
+    });
+  };
+
+  // Filter movies - backend handles status/approval/publication filters via query params
+  // Client-side only applies search text filter as a fallback for immediate feedback
+  const filteredMovies = moviesList.filter(mv => {
+    const normalizedQuery = String(searchQuery || '').trim().toLowerCase();
+    if (!normalizedQuery) return true;
+
+    // Admin movie responses can legitimately omit optional metadata. Coercing the
+    // searchable values prevents one incomplete movie from crashing the whole page.
+    const matchesSearch = [mv?.title, mv?.englishTitle, mv?.director]
+      .some((value) => String(value || '').toLowerCase().includes(normalizedQuery));
+    return matchesSearch;
+  });
+
+  const filteredGenres = genres.filter((genre) => {
+    const query = genreSearch.trim().toLowerCase();
+    if (!query) return true;
+    return (
+      genre.name?.toLowerCase().includes(query) ||
+      genre.description?.toLowerCase().includes(query)
+    );
+  });
+
+  const filteredActors = activeTab === 'actors' ? actors : actors.filter((actor) => {
+    const query = actorSearch.trim().toLowerCase();
+    return !query || actor.name?.toLowerCase().includes(query) || actor.biography?.toLowerCase().includes(query);
+  });
+
+  const adminCtx = {
+    activeTab,
+    setActiveTab,
+    activeChartPoint,
+    setActiveChartPoint,
+    searchQuery,
+    setSearchQuery,
+    filmFilter,
+    setFilmFilter,
+    adminGenreFilter,
+    setAdminGenreFilter,
+    adminMoviePagination,
+    setAdminMoviePagination,
+    editingMovie,
+    setEditingMovie,
+    showMovieForm,
+    setShowMovieForm,
+    isMovieSaving,
+    movieFormError,
+    setMovieFormError,
+    formData,
+    setFormData,
+    newShowtime,
+    setNewShowtime,
+    isAddingShowtime,
+    setIsAddingShowtime,
+    showtimeSuccessMessage,
+    setShowtimeSuccessMessage,
+    genres,
+    setGenres,
+    genrePagination,
+    setGenrePagination,
+    genreSearch,
+    setGenreSearch,
+    genreForm,
+    setGenreForm,
+    genreErrors,
+    setGenreErrors,
+    editingGenreId,
+    setEditingGenreId,
+    isGenreLoading,
+    setIsGenreLoading,
+    isGenreSaving,
+    setIsGenreSaving,
+    actors,
+    setActors,
+    actorSearch,
+    setActorSearch,
+    actorForm,
+    setActorForm,
+    actorErrors,
+    setActorErrors,
+    editingActorId,
+    setEditingActorId,
+    isActorLoading,
+    isActorSaving,
+    actorPagination,
+    setActorPagination,
+    foodItems,
+    setFoodItems,
+    foodCombos,
+    setFoodCombos,
+    foodSearch,
+    setFoodSearch,
+    foodKind,
+    setFoodKind,
+    editingFood,
+    setEditingFood,
+    foodForm,
+    setFoodForm,
+    foodErrors,
+    setFoodErrors,
+    isFoodLoading,
+    setIsFoodLoading,
+    isFoodSaving,
+    setIsFoodSaving,
+    isFoodImageUploading,
+    handleFoodImageUpload,
+    adminUsers,
+    setAdminUsers,
+    selectedAdminUser,
+    setSelectedAdminUser,
+    userSearch,
+    setUserSearch,
+    isUsersLoading,
+    setIsUsersLoading,
+    isUserDetailLoading,
+    setIsUserDetailLoading,
+    isUserStatusSaving,
+    setIsUserStatusSaving,
+    isStaffCreating,
+    visibleFoods,
+    HALL_OPTIONS,
+    TIME_OPTIONS,
+    playPulseSound,
+    addAuditLog,
+    resetFoodForm,
+    validateFoodForm,
+    fetchFoods,
+    handleFoodSubmit,
+    handleEditFood,
+    handleToggleFoodStatus,
+    getAdminToken,
+    changeAdminSection,
+    validateGenreForm,
+    fetchGenres,
+    resetGenreForm,
+    handleGenreSubmit,
+    handleEditGenre,
+    performDeleteGenre,
+    handleDeleteGenre,
+    fetchActors,
+    resetActorForm,
+    handleActorSubmit,
+    handleEditActor,
+    handleDeleteActor,
+    fetchAdminUsers,
+    handleSelectAdminUser,
+    handleCreateStaff,
+    handleUpdateAdminUserStatus,
+    resetMovieForm,
+    handleEditMovie,
+    handleCreateMovieSubmit,
+    handleSubmitMovieForApproval,
+    handleWithdrawMovieApproval,
+    handleApproveMovie,
+    handleRejectMovie,
+    handlePublishMovie,
+    handleUnpublishMovie,
+    handleArchiveMovie,
+    handleUnarchiveMovie,
+    handleFetchApprovalHistory,
+    handleUpdateMovieStatus,
+    handleDeleteMovie,
+    handleAddShowtimeSubmit,
+    handleRefundTicket,
+    filteredMovies,
+    filteredGenres,
+    filteredActors,
+    moviesList,
+    setMoviesList,
+    bookedTickets,
+    setBookedTickets,
+    publicCinema: (isManager && assignedCinema) ? assignedCinema : publicCinema,
+    assignedCinema,
+    selectedCinemaId: isManager ? (assignedCinema?.id || currentUser?.cinemaId) : null,
+    onCinemaChanged,
+    onSelectMovie,
+    showToast,
+    initialSection,
+    onSectionChange,
+    onFoodCatalogChanged,
+    heroBannerInitialMovieId,
+    setHeroBannerInitialMovieId,
+    isAdmin,
+    isManager,
+    isEffectiveManager,
+    isEffectiveAdmin,
+    currentUser
+  };
+
+  const adminPanels = {
+    overview: AdminOverviewPanel,
+    'hero-banners': AdminHeroBannerPanel,
+    movies: AdminMoviesPanel,
+    genres: AdminGenresPanel,
+    actors: AdminActorsPanel,
+    directors: AdminDirectorsPanel,
+    pricing: AdminPricingPanel,
+    settings: AdminSystemSettingsPanel,
+    foods: AdminFoodsPanel,
+    'fnb-report': AdminFnbReportPanel,
+    showtimes: AdminShowtimesPanel,
+    'showtime-incidents': AdminShowtimeIncidentsPanel,
+    tickets: AdminTicketsPanel,
+    transactions: AdminTransactionsPanel,
+    statistics: AdminStatsPanel,
+    audit: AdminAuditPanel,
+    users: AdminUsersPanel,
+    staff: AdminUsersPanel,
+    reviews: AdminReviewsPanel,
+    cinewallet: AdminWalletPanel,
+    loyalty: AdminLoyaltyPanel,
+    cinema: AdminCinemaPanel,
+    rooms: AdminRoomsPanel,
+
+  };
+
+  const ActiveAdminPanel = adminPanels[activeTab] || AdminOverviewPanel;
+
+  return (
+    <div className="relative flex h-full text-white select-none overflow-hidden">
+
+      {compactViewport && mobileNavOpen && <><div className="w-[52px] shrink-0" aria-hidden="true" /><button type="button" aria-label="Đóng thanh điều hướng" className="absolute inset-0 z-30 bg-black/60" onClick={() => setMobileNavOpen(false)} /></>}
+
+      {/* LEFT: SIDEBAR (full height) */}
+      <div
+        className={`shrink-0 h-full flex flex-col border-r border-white/[0.15] bg-[#181818] transition-[width] duration-300 ${compactViewport && mobileNavOpen ? 'absolute left-0 top-0 z-40' : ''} ${sidebarCollapsed ? 'w-[52px]' : 'w-[240px] overflow-hidden'
+          }`}
+        id="admin-sidebar-bar"
+      >
+        {/* Logo */}
+        <div
+          className={`h-[52px] shrink-0 flex items-center border-b border-white/[0.10] ${sidebarCollapsed ? 'justify-center' : 'px-4 gap-3'}`}
+          onMouseEnter={sidebarCollapsed ? (e) => setCollapsedTooltip({ key: 'logo', y: e.currentTarget.getBoundingClientRect().top + 26 }) : undefined}
+          onMouseLeave={sidebarCollapsed ? () => setCollapsedTooltip(null) : undefined}
+        >
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center bg-amber-500/[0.07] border border-amber-500/25">
+            <span className="font-serif text-[13px] font-black italic text-amber-400">C</span>
+          </div>
+          {!sidebarCollapsed && (
+            <div className="flex flex-col min-w-0">
+              <span className="text-[11.5px] font-black leading-tight tracking-[0.12em] text-white">
+                CINE<span className="text-amber-400">PREMIER</span>
+              </span>
+              <span className="text-[8px] font-mono uppercase leading-tight tracking-[0.3em] text-neutral-300">
+                {isEffectiveAdmin ? 'Admin Console' : 'Cinema Manager'}
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* Scrollable nav */}
+        <div className={`flex-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${sidebarCollapsed ? '' : 'overflow-x-hidden'}`}>
+          {sidebarCollapsed ? (
+            <div className="py-3 flex flex-col items-center">
+              {(isEffectiveManager ? [
+                { icon: Activity, tab: 'overview', sound: 440 },
+                null,
+                { icon: Clapperboard, tab: 'hero-banners', sound: 462 },
+                null,
+                { icon: Layers, tab: 'rooms', sound: 470 },
+                { icon: Calendar, tab: 'showtimes', sound: 480 },
+                { icon: DollarSign, tab: 'pricing', sound: 475 },
+                { icon: AlertCircle, tab: 'showtime-incidents', sound: 486 },
+                { icon: FileText, tab: 'tickets', sound: 492 },
+                { icon: MessageSquare, tab: 'reviews', sound: 515 },
+                null,
+                { icon: Shield, tab: 'staff', sound: 512 },
+                null,
+                { icon: BarChart2, tab: 'fnb-report', sound: 486 },
+                { icon: BarChart2, tab: 'statistics', sound: 505 },
+              ] : [
+                { icon: Activity, tab: 'overview', sound: 440 },
+                null,
+                { icon: Clapperboard, tab: 'hero-banners', sound: 462 },
+                null,
+                { icon: Tags, tab: 'genres', sound: 470 },
+                { icon: Users, tab: 'actors', sound: 465 },
+                { icon: Film, tab: 'movies', sound: 460 },
+                null,
+                { icon: ShoppingBag, tab: 'foods', sound: 478 },
+                { icon: BarChart2, tab: 'fnb-report', sound: 486 },
+                null,
+                { icon: Building2, tab: 'cinema', sound: 465 },
+                { icon: FileText, tab: 'tickets', sound: 492 },
+                { icon: FileText, tab: 'transactions', sound: 500 },
+                null,
+                { icon: BarChart2, tab: 'statistics', sound: 505 },
+                { icon: ShieldAlert, tab: 'audit', sound: 508 },
+                null,
+                { icon: Users, tab: 'users', sound: 510 },
+                { icon: MessageSquare, tab: 'reviews', sound: 515 },
+                { icon: DollarSign, tab: 'loyalty', sound: 520 },
+                { icon: Wallet, tab: 'cinewallet', sound: 525 },
+                { icon: Sliders, tab: 'settings', sound: 530 }
+              ]).map((item, index) => item === null ? (
+                <div key={`div-${index}`} className="w-6 h-px bg-white/[0.06] my-1.5" />
+              ) : (
+                <div key={item.tab} className="w-full flex justify-center mb-0.5">
+                  <button
+                    type="button"
+                    disabled={item.disabled}
+                    onClick={() => {
+                      if (item.disabled) return;
+                      playPulseSound(item.sound, 'sine', 0.05);
+                      changeAdminSection(item.tab);
+                    }}
+                    aria-label={SECTION_TITLE[item.tab]}
+                    aria-current={activeTab === item.tab ? 'page' : undefined}
+                    onMouseEnter={(e) => setCollapsedTooltip({ key: item.tab, y: e.currentTarget.getBoundingClientRect().top + 18, disabled: item.disabled })}
+                    onMouseLeave={() => setCollapsedTooltip(null)}
+                    className={`h-9 w-9 flex items-center justify-center border-l-2 transition-all duration-100 ${
+                      item.disabled
+                        ? 'opacity-25 cursor-not-allowed text-neutral-600 border-transparent hover:bg-transparent'
+                        : activeTab === item.tab
+                          ? 'bg-amber-500/[0.09] text-amber-400 border-amber-500'
+                          : 'text-neutral-500 hover:text-neutral-200 hover:bg-white/[0.02] border-transparent'
+                    }`}
+                  >
+                    <item.icon className="h-[13px] w-[13px]" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="flex flex-col">
+              {/* Profile card */}
+              <div className="mx-3 mt-3 mb-1 bg-gradient-to-b from-[#111111] to-[#090909] border border-white/[0.03] p-2.5 flex items-center gap-2">
+                <div className="h-7 w-7 shrink-0 border border-amber-500/30 bg-amber-500/[0.07] flex items-center justify-center">
+                  <span className="text-[12px] font-black italic font-serif text-amber-400">{isEffectiveAdmin ? 'A' : 'M'}</span>
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[11px] font-semibold text-white truncate leading-tight">
+                    {isEffectiveAdmin ? 'Quản trị viên' : (currentUser?.fullName || currentUser?.name || 'Quản lý cụm rạp')}
+                  </p>
+                  <p className="text-[8px] text-neutral-300 font-mono leading-tight tracking-wider truncate">{isEffectiveAdmin ? 'CP-99210-ADMIN' : (assignedCinema?.name || ('Rạp #' + currentUser?.cinemaId))}</p>
+                </div>
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shrink-0" />
+              </div>
+
+              {/* Flat nav with section labels */}
+              <nav className="pb-4">
+                <NavSectionLabel>Tổng quan</NavSectionLabel>
+                <NavItem icon={Activity} label={isEffectiveManager ? "Tổng quan cụm rạp" : "Tổng quan hệ thống"} active={activeTab === 'overview'} onClick={() => { playPulseSound(440, 'sine', 0.05); changeAdminSection('overview'); }} />
+
+                <NavSectionLabel>Nội dung &amp; Marketing</NavSectionLabel>
+                <NavItem indent icon={Clapperboard} label="Hero Banner" active={activeTab === 'hero-banners'} onClick={() => { playPulseSound(462, 'sine', 0.05); changeAdminSection('hero-banners'); }} />
+
+                {isEffectiveAdmin && (
+                  <>
+                    <NavSectionLabel>Quản lý phim</NavSectionLabel>
+                    <NavItem indent icon={Tags} label="Thể loại phim" active={activeTab === 'genres'} onClick={() => { playPulseSound(470, 'sine', 0.05); changeAdminSection('genres'); }} />
+                    <NavItem indent icon={Users} label="Diễn viên" active={activeTab === 'actors'} onClick={() => { playPulseSound(465, 'sine', 0.05); changeAdminSection('actors'); }} />
+                    <NavItem indent icon={Film} label="Thư viện phim" active={activeTab === 'movies'} onClick={() => { playPulseSound(460, 'sine', 0.05); changeAdminSection('movies'); }} />
+                  </>
+                )}
+
+                <NavSectionLabel>{isEffectiveManager ? "Vận hành rạp" : "Quản lý rạp"}</NavSectionLabel>
+                {isEffectiveAdmin && (
+                  <NavItem indent icon={Building2} label="Hệ thống cụm rạp" active={activeTab === 'cinema'} onClick={() => { playPulseSound(465, 'sine', 0.05); changeAdminSection('cinema'); }} />
+                )}
+                {isEffectiveManager && (
+                  <>
+                    <NavItem indent icon={Layers} label="Phòng chiếu & ghế" active={activeTab === 'rooms'} onClick={() => { playPulseSound(470, 'sine', 0.05); changeAdminSection('rooms'); }} />
+                    <NavItem indent icon={Calendar} label="Điều phối lịch chiếu" active={activeTab === 'showtimes'} onClick={() => { playPulseSound(480, 'sine', 0.05); changeAdminSection('showtimes'); }} />
+                    <NavItem indent icon={DollarSign} label="Bảng giá vé" active={activeTab === 'pricing'} onClick={() => { playPulseSound(475, 'sine', 0.05); changeAdminSection('pricing'); }} />
+                    <NavItem indent icon={AlertCircle} label="Sự cố & Xử lý hoàn tiền" active={activeTab === 'showtime-incidents'} onClick={() => { playPulseSound(486, 'sine', 0.05); changeAdminSection('showtime-incidents'); }} />
+                  </>
+                )}
+                <NavItem indent icon={FileText} label="Quản lý vé" active={activeTab === 'tickets'} onClick={() => { playPulseSound(492, 'sine', 0.05); changeAdminSection('tickets'); }} />
+                {isEffectiveAdmin && (
+                  <NavItem indent icon={FileText} label="Giao dịch" active={activeTab === 'transactions'} onClick={() => { playPulseSound(500, 'sine', 0.05); changeAdminSection('transactions'); }} />
+                )}
+
+                {isEffectiveAdmin && (
+                  <>
+                    <NavSectionLabel>Khách hàng</NavSectionLabel>
+                    <NavItem indent icon={Users} label="Quản lý người dùng" active={activeTab === 'users'} onClick={() => { playPulseSound(510, 'sine', 0.05); changeAdminSection('users'); }} />
+                    <NavItem indent icon={MessageSquare} label="Đánh giá phim" active={activeTab === 'reviews'} onClick={() => { playPulseSound(515, 'sine', 0.05); changeAdminSection('reviews'); }} />
+                    <NavItem indent icon={DollarSign} label="Điểm tích lũy" active={activeTab === 'loyalty'} onClick={() => { playPulseSound(520, 'sine', 0.05); changeAdminSection('loyalty'); }} />
+                    <NavItem indent icon={Wallet} label="CineWallet" active={activeTab === 'cinewallet'} onClick={() => { playPulseSound(525, 'sine', 0.05); changeAdminSection('cinewallet'); }} />
+                  </>
+                )}
+
+                {isEffectiveManager && (
+                  <>
+                    <NavSectionLabel>Khách hàng &amp; Phản hồi</NavSectionLabel>
+                    <NavItem indent icon={MessageSquare} label="Đánh giá khán giả" active={activeTab === 'reviews'} onClick={() => { playPulseSound(515, 'sine', 0.05); changeAdminSection('reviews'); }} />
+                    <NavItem indent icon={Coins} label="Lịch sử điểm người dùng" active={activeTab === 'loyalty'} onClick={() => { playPulseSound(520, 'sine', 0.05); changeAdminSection('loyalty'); }} />
+                  </>
+                )}
+
+                {isEffectiveManager && (
+                  <>
+                    <NavSectionLabel>Nhân sự</NavSectionLabel>
+                    <NavItem indent icon={Shield} label="Nhân viên cụm rạp" active={activeTab === 'staff'} onClick={() => { playPulseSound(512, 'sine', 0.05); changeAdminSection('staff'); }} />
+                  </>
+                )}
+
+                <NavSectionLabel>Báo cáo &amp; F&B</NavSectionLabel>
+                {isEffectiveAdmin && (
+                  <NavItem indent icon={ShoppingBag} label="Quản lý bắp nước" active={activeTab === 'foods'} onClick={() => { playPulseSound(478, 'sine', 0.05); changeAdminSection('foods'); }} />
+                )}
+                <NavItem indent icon={BarChart2} label="Báo cáo F&B" active={activeTab === 'fnb-report'} onClick={() => { playPulseSound(486, 'sine', 0.05); changeAdminSection('fnb-report'); }} />
+                <NavItem indent icon={BarChart2} label={isEffectiveManager ? "Doanh thu rạp" : "Thống kê mua bán"} active={activeTab === 'statistics'} onClick={() => { playPulseSound(505, 'sine', 0.05); changeAdminSection('statistics'); }} />
+
+                {isEffectiveAdmin && (
+                  <>
+                    <NavSectionLabel>Hệ thống &amp; Giám sát</NavSectionLabel>
+                    <NavItem indent icon={ShieldAlert} label="Audit log" active={activeTab === 'audit'} onClick={() => { playPulseSound(508, 'sine', 0.05); changeAdminSection('audit'); }} />
+                    <NavItem indent icon={Sliders} label="Cấu hình hệ thống" active={activeTab === 'settings'} onClick={() => { playPulseSound(530, 'sine', 0.05); changeAdminSection('settings'); }} />
+                  </>
+                )}
+              </nav>
+            </div>
+          )}
+        </div>
+
+        {/* Sidebar bottom */}
+        <div className={`shrink-0 border-t border-white/[0.10] ${sidebarCollapsed ? 'p-2 flex flex-col items-center gap-1' : 'p-3 space-y-1'}`}>
+          {!sidebarCollapsed && (
+            <button
+              type="button"
+              onClick={() => isEffectiveAdmin ? navigate('/admin/cinema') : undefined}
+              className="w-full flex items-center gap-2 px-2 py-1.5 hover:bg-white/[0.02] border border-transparent hover:border-white/[0.04] transition-colors group"
+            >
+              <MapPin className="h-3 w-3 text-amber-400 shrink-0 group-hover:text-amber-300 transition-colors" />
+              <div className="min-w-0 text-left">
+                {isAdmin ? (
+                  <>
+                    <span className="block text-[10px] font-medium text-neutral-200 group-hover:text-neutral-100 truncate transition-colors leading-tight">Hệ thống CinemaAI</span>
+                    <span className="block text-[7.5px] font-mono text-neutral-400 truncate">Toàn bộ chi nhánh</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="block text-[10px] font-medium text-neutral-200 group-hover:text-neutral-100 truncate transition-colors leading-tight">
+                      {assignedCinema?.name || (currentUser?.cinemaId ? `Rạp #${currentUser.cinemaId}` : 'Chi nhánh của bạn')}
+                    </span>
+                    <span className="block text-[7.5px] font-mono text-neutral-400 truncate">
+                      {assignedCinema?.city || assignedCinema?.address || 'Khu vực quản lý'}
+                    </span>
+                  </>
+                )}
+              </div>
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => handleLogout({ navigate, showToast })}
+            aria-label="Đăng xuất"
+            className={`flex items-center gap-2 text-[10.5px] font-medium text-neutral-300 hover:text-neutral-200 hover:bg-white/[0.02] transition-colors ${sidebarCollapsed ? 'h-8 w-8 justify-center' : 'w-full px-2 py-1.5'}`}
+          >
+            <LogOut className="h-3 w-3 shrink-0" />
+            {!sidebarCollapsed && <span>Đăng xuất</span>}
+          </button>
+        </div>
+      </div>
+
+      {/* Collapsed sidebar tooltip — fixed so it escapes overflow-y-auto clipping */}
+      {collapsedTooltip && sidebarCollapsed && (
+        <div className="fixed z-[9999] left-[56px] pointer-events-none" style={{ top: collapsedTooltip.y }}>
+          <div className="-translate-y-1/2 bg-[#1c1c1c] rounded-md whitespace-nowrap shadow-xl">
+            {collapsedTooltip.key === 'logo' ? (
+              <div className="px-3 py-2">
+                <span className="block text-[11.5px] font-black tracking-[0.12em] text-white leading-tight">CINE<span className="text-amber-400">PREMIER</span></span>
+                <span className="block text-[7px] font-mono uppercase tracking-[0.3em] text-neutral-200 leading-tight mt-0.5">Admin Console</span>
+              </div>
+            ) : (
+              <div className="px-3 py-1.5">
+                <span className="text-[12px] font-semibold text-white">{SECTION_TITLE[collapsedTooltip.key]}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* RIGHT: header + scrollable content */}
+      <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden">
+        {/* Header */}
+        <div className="h-[52px] shrink-0 flex items-center gap-2 border-b border-white/[0.10] bg-[#0e0e0e] px-4">
+          <button
+            type="button"
+            aria-label={sidebarCollapsed ? 'Mở thanh điều hướng' : 'Thu gọn thanh điều hướng'}
+            onClick={() => compactViewport ? setMobileNavOpen(value => !value) : toggleAdminSidebar()}
+            className="flex h-7 w-7 shrink-0 items-center justify-center text-neutral-300 hover:text-neutral-200 hover:bg-white/[0.03] transition-colors"
+          >
+            <Menu className="h-3.5 w-3.5" />
+          </button>
+          <div className="w-px h-3.5 bg-white/[0.04] mx-1 shrink-0" />
+          <div className="flex items-center gap-1.5 min-w-0">
+            {getNavGroup(activeTab) && (
+              <>
+                <span className="text-[9px] font-mono tracking-[0.15em] text-neutral-200 uppercase hidden sm:block">
+                  {getNavGroup(activeTab) === 'movies' ? 'Quản lý phim' : getNavGroup(activeTab) === 'fnb' ? 'F&B' : getNavGroup(activeTab) === 'cinema' ? 'Quản lý rạp' : getNavGroup(activeTab) === 'insights' ? 'Thống kê' : getNavGroup(activeTab) === 'staff' ? 'Nhân sự' : getNavGroup(activeTab) === 'users' ? 'Khách hàng' : 'Hệ thống'}
+                </span>
+                <span className="text-neutral-300 text-[9px] hidden sm:block">/</span>
+              </>
+            )}
+            <span className="text-[11px] font-medium text-neutral-300 truncate hidden sm:block">
+              {activeTab === 'staff'
+                ? (isEffectiveAdmin ? 'Nhân sự toàn hệ thống' : 'Nhân viên cụm rạp')
+                : activeTab === 'loyalty'
+                  ? (isEffectiveManager ? 'Lịch sử điểm người dùng' : 'Quản lý điểm')
+                  : (activeTab === 'overview'
+                    ? (isEffectiveManager ? 'Tổng quan cụm rạp' : 'Tổng quan hệ thống')
+                    : (SECTION_TITLE[activeTab] || 'Dashboard'))}
+            </span>
+          </div>
+          <div className="flex-1" />
+          <button
+            type="button"
+            className="hidden h-7 items-center gap-1.5 px-2.5 hover:text-amber-400/70 hover:bg-white/[0.03] md:flex group transition-colors"
+          >
+            <User className="h-3 w-3 text-neutral-300 shrink-0 group-hover:text-amber-400/60 transition-colors" />
+            <span className="text-[10px] font-medium text-neutral-200 group-hover:text-amber-400/70 transition-colors">
+              {isEffectiveAdmin ? 'Admin' : `${currentUser?.fullName || currentUser?.name || 'Manager'} • ${assignedCinema?.name || 'Chi nhánh của bạn'}`}
+            </span>
+          </button>
+        </div>
+
+        {/* Scrollable content */}
+        <div className="flex-1 min-w-0 overflow-y-auto bg-[#020202]">
+          <div className={activeTab === 'showtimes' ? "px-0 xl:px-0 py-6 space-y-5" : "workspace-container py-6 space-y-5"}>
+
+
+            {/* ACTIVE PANEL */}
+            <AnimatePresence mode="wait">
+              <ActiveAdminPanel key={activeTab} ctx={adminCtx} />
+            </AnimatePresence>
+
+          </div>
+        </div>
+      </div>
+
+    </div>
+  );
+}

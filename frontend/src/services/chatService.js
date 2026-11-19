@@ -1,0 +1,41 @@
+import { aiRequest } from './aiClient.js';
+
+const CONVERSATION_ID_KEY_PREFIX = 'cinepremier_chat_conversation_id';
+
+const keyFor = (scope) => `${CONVERSATION_ID_KEY_PREFIX}:${scope}`;
+
+export const getStoredConversationId = (scope = 'default') => localStorage.getItem(keyFor(scope)) || null;
+
+export const setStoredConversationId = (conversationId, scope = 'default') => {
+  if (conversationId) localStorage.setItem(keyFor(scope), conversationId);
+};
+
+export const clearStoredConversationId = (scope = 'default') => localStorage.removeItem(keyFor(scope));
+
+export const clearAllStoredConversationIds = () => {
+  Object.keys(localStorage)
+    .filter((key) => key.startsWith(CONVERSATION_ID_KEY_PREFIX))
+    .forEach((key) => localStorage.removeItem(key));
+};
+
+const CHAT_TIMEOUT_MS = 120000;
+
+export const chatService = {
+  sendMessage: ({ message, movieId, userId, token, scope = 'default' }) => {
+    const conversationId = getStoredConversationId(scope);
+    return aiRequest('/api/v1/chat/message', {
+      method: 'POST',
+      body: {
+        message,
+        movieId: movieId ? Number(movieId) : null,
+        userId: userId ? Number(userId) : null,
+        conversationId
+      },
+      token,
+      timeout: CHAT_TIMEOUT_MS
+    }).then((res) => {
+      if (res?.conversationId) setStoredConversationId(res.conversationId, scope);
+      return res;
+    });
+  }
+};
