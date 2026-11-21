@@ -2,6 +2,8 @@
 
 Cinema is a work-in-progress cinema booking application developed as a team project. This repository contains a snapshot of the frontend and backend for portfolio review.
 
+**Frontend preview:** [cinema-six-brown.vercel.app](https://cinema-six-brown.vercel.app/) — UI preview only. The backend is not publicly deployed, so API-dependent features are unavailable.
+
 ## Project structure
 
 - `frontend/` — React, TypeScript and Vite application.
@@ -15,7 +17,7 @@ See [frontend/README.md](frontend/README.md) and [backend/README.md](backend/REA
 
 ## Status
 
-This project is still under development. A public deployment and end-to-end verification are not yet documented here.
+This project is still under development. End-to-end verification of a public deployment has not yet been completed.
 
 ## Attribution
 
