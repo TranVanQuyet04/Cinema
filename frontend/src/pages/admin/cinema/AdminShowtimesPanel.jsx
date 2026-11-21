@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { isMovieShowingOnDate } from '../../../utils/movieShowingWindow.js';
 import { adminService } from '../../../services/adminService';
 import { movieService } from '../../../services/movieService';
 
@@ -185,7 +186,6 @@ export default function AdminShowtimesPanel({ ctx }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [dragGhost, setDragGhost] = useState(null);
   const [draggingShowId, setDraggingShowId] = useState(null);
-  const [movieFilter, setMovieFilter] = useState('NOW_SHOWING'); // 'NOW_SHOWING' | 'UPCOMING' | 'ALL'
   const [loadingMovies, setLoadingMovies] = useState(false);
 
   /* Date Validation Flags (Chính sách cấm tạo suất ở ngày hiện tại/quá khứ) */
@@ -479,8 +479,8 @@ export default function AdminShowtimesPanel({ ctx }) {
       const dur = Number(m.duration || m.durationMinutes || 120);
       const formats = m.formats || (m.type ? [m.type] : ['2D', '3D', 'IMAX']);
       const age = m.ageRating || m.rating || (m.age ? `T${m.age}` : 'P');
-      const release = normalizeDateStr(m.releaseDate || m.startDate || '2026-09-10');
-      const end = normalizeDateStr(m.endDate || '2026-11-24');
+      const release = normalizeDateStr(m.releaseDate || m.startDate);
+      const end = normalizeDateStr(m.endDate);
       const color = m.color || MOVIE_PALETTE[i % MOVIE_PALETTE.length];
       const status = String(m.status || m.movieStatus || 'NOW_SHOWING').toUpperCase();
       return {
@@ -1161,30 +1161,13 @@ export default function AdminShowtimesPanel({ ctx }) {
 
 
 
-  /* Filtered Movies (Ưu tiên phim có thể tạo suất chiếu lên đầu tiên) */
+  const showingMovies = useMemo(() => movies.filter(m => isMovieShowingOnDate(m, date)), [movies, date]);
+
+  /* Chỉ hiển thị phim nằm trong thời gian chiếu của ngày đang chọn. */
   const filteredMovies = useMemo(() => {
     const q = searchQuery.toLowerCase().trim();
-    const list = movies.filter(m => {
-      const matchSearch = !q || m.title.toLowerCase().includes(q);
-      if (!matchSearch) return false;
-      if (movieFilter === 'NOW_SHOWING') {
-        return m.status === 'NOW_SHOWING' || (m.release <= date && m.end >= date);
-      }
-      if (movieFilter === 'UPCOMING') {
-        return m.status === 'UPCOMING' || m.release > date;
-      }
-      return true;
-    });
-
-    // Sắp xếp: Ưu tiên phim có thể tạo suất chiếu (đã phát hành & chưa hết hạn) lên đầu tiên
-    return list.slice().sort((a, b) => {
-      const aValid = (!a.release || a.release <= date) && (!a.end || a.end >= date);
-      const bValid = (!b.release || b.release <= date) && (!b.end || b.end >= date);
-      if (aValid && !bValid) return -1;
-      if (!aValid && bValid) return 1;
-      return 0;
-    });
-  }, [movies, searchQuery, movieFilter, date]);
+    return showingMovies.filter(m => !q || m.title.toLowerCase().includes(q));
+  }, [showingMovies, searchQuery]);
 
   /* Stats */
   const stats = useMemo(() => {
@@ -2133,7 +2116,7 @@ export default function AdminShowtimesPanel({ ctx }) {
             <div>
               <h3>Phim đang chiếu</h3>
               <small>
-                {movies.filter(m => m.status === 'NOW_SHOWING' || (m.release <= date && m.end >= date)).length} phim đang chiếu • {movies.filter(m => m.status === 'UPCOMING' || m.release > date).length} sắp chiếu
+                {showingMovies.length} phim trong thời gian chiếu
               </small>
             </div>
             <button
@@ -2163,64 +2146,6 @@ export default function AdminShowtimesPanel({ ctx }) {
                 <span>Khóa kéo thả lên lịch cho ngày {isToday ? 'hôm nay' : 'quá khứ'}</span>
               </div>
             )}
-            {/* Filter Tabs: Đang chiếu / Sắp chiếu / Tất cả */}
-            <div style={{ display: 'flex', gap: '4px', marginBottom: '8px' }}>
-              <button
-                type="button"
-                className={`tag ${movieFilter === 'NOW_SHOWING' ? 'hot' : ''}`}
-                style={{
-                  cursor: 'pointer',
-                  padding: '4px 8px',
-                  borderRadius: '6px',
-                  border: '1px solid var(--line)',
-                  background: movieFilter === 'NOW_SHOWING' ? 'var(--primary)' : '#161b22',
-                  color: movieFilter === 'NOW_SHOWING' ? '#000' : '#c9d1d9',
-                  fontWeight: movieFilter === 'NOW_SHOWING' ? 700 : 500,
-                  fontSize: '11px',
-                  transition: '0.15s'
-                }}
-                onClick={() => setMovieFilter('NOW_SHOWING')}
-              >
-                Đang chiếu ({movies.filter(m => m.status === 'NOW_SHOWING' || (m.release <= date && m.end >= date)).length})
-              </button>
-              <button
-                type="button"
-                className={`tag ${movieFilter === 'UPCOMING' ? 'hot' : ''}`}
-                style={{
-                  cursor: 'pointer',
-                  padding: '4px 8px',
-                  borderRadius: '6px',
-                  border: '1px solid var(--line)',
-                  background: movieFilter === 'UPCOMING' ? 'var(--primary)' : '#161b22',
-                  color: movieFilter === 'UPCOMING' ? '#000' : '#c9d1d9',
-                  fontWeight: movieFilter === 'UPCOMING' ? 700 : 500,
-                  fontSize: '11px',
-                  transition: '0.15s'
-                }}
-                onClick={() => setMovieFilter('UPCOMING')}
-              >
-                Sắp chiếu ({movies.filter(m => m.status === 'UPCOMING' || m.release > date).length})
-              </button>
-              <button
-                type="button"
-                className={`tag ${movieFilter === 'ALL' ? 'hot' : ''}`}
-                style={{
-                  cursor: 'pointer',
-                  padding: '4px 8px',
-                  borderRadius: '6px',
-                  border: '1px solid var(--line)',
-                  background: movieFilter === 'ALL' ? 'var(--primary)' : '#161b22',
-                  color: movieFilter === 'ALL' ? '#000' : '#c9d1d9',
-                  fontWeight: movieFilter === 'ALL' ? 700 : 500,
-                  fontSize: '11px',
-                  transition: '0.15s'
-                }}
-                onClick={() => setMovieFilter('ALL')}
-              >
-                Tất cả ({movies.length})
-              </button>
-            </div>
-
             <input
               className="search"
               placeholder="Tìm phim..."
@@ -2274,7 +2199,7 @@ export default function AdminShowtimesPanel({ ctx }) {
                       pickMovie(m.id);
                     }}
                     style={{
-                      opacity: isInvalidForDate ? 0.42 : soon ? 0.7 : 1,
+                      opacity: isInvalidForDate ? 0.42 : 1,
                       cursor: isInvalidForDate ? 'not-allowed' : 'pointer',
                       filter: isInvalidForDate ? 'grayscale(0.55)' : undefined
                     }}
@@ -3404,7 +3329,7 @@ export default function AdminShowtimesPanel({ ctx }) {
                   sold: ds.filter(s => Number(s.movieId) === Number(id)).reduce((a, s) => a + s.sold, 0)
                 })).sort((a, b) => b.n - a.n);
 
-                const notIn = movies.filter(m => m.release <= date && m.end >= date && !ds.some(s => Number(s.movieId) === Number(m.id)));
+                const notIn = movies.filter(m => isMovieShowingOnDate(m, date) && !ds.some(s => Number(s.movieId) === Number(m.id)));
 
                 return (
                   <div>
@@ -4438,7 +4363,7 @@ function AutoModalContent({ date, rooms, movies, onClose, onSuccess, getAdminTok
       <div className="field">
         <label>Phim luân phiên (theo thứ tự)</label>
         <div className="chips">
-          {movies.filter(m => m.release <= date && m.end >= date).map(m => (
+          {movies.filter(m => isMovieShowingOnDate(m, date)).map(m => (
             <button
               key={m.id}
               type="button"
