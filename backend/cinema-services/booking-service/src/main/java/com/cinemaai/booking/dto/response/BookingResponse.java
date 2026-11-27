@@ -3,6 +3,8 @@ package com.cinemaai.booking.dto.response;
 import com.cinemaai.booking.enums.BookingStatus;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
 import lombok.Builder;
 
@@ -45,6 +47,11 @@ public record BookingResponse(
         LocalDateTime showtimeEnd,
         String refundReason
 ) {
+    @JsonProperty("holdExpiresAtEpochMs")
+    public Long holdExpiresAtEpochMs() {
+        return holdExpiresAt == null ? null : holdExpiresAt.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+    }
+
     public BookingResponse(
             Long id,
             String bookingCode,

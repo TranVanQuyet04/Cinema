@@ -1,4 +1,5 @@
 import { buildQueryString, request, unwrapListPayload } from './authService';
+import { normalizeBookingExpiry } from '../utils/bookingExpiry';
 
 export const bookingService = {
   getShowtimes: (params = {}) => request(`/api/v1/showtimes${buildQueryString(params)}`),
@@ -8,12 +9,12 @@ export const bookingService = {
   getShowtimeDetail: (showtimeId) => request(`/api/v1/showtimes/${showtimeId}`),
   validateTicketPrice: (token, body) => request('/api/v1/ticket-pricing/validate', { method: 'POST', token, body }),
   getCheckoutQuote: (token, body) => request('/api/v1/catalog/checkout-quote', { method: 'POST', token, body }),
-  holdSeats: (token, body) => request('/api/v1/bookings/hold', { method: 'POST', token, body }),
-  checkoutBooking: (token, bookingId, body) => request(`/api/v1/bookings/${bookingId}/checkout`, { method: 'POST', token, body }),
-  updateHoldingBooking: (token, bookingId, body) => request(`/api/v1/bookings/${bookingId}/items`, { method: 'PUT', token, body }),
+  holdSeats: (token, body) => request('/api/v1/bookings/hold', { method: 'POST', token, body }).then(normalizeBookingExpiry),
+  checkoutBooking: (token, bookingId, body) => request(`/api/v1/bookings/${bookingId}/checkout`, { method: 'POST', token, body }).then(normalizeBookingExpiry),
+  updateHoldingBooking: (token, bookingId, body) => request(`/api/v1/bookings/${bookingId}/items`, { method: 'PUT', token, body }).then(normalizeBookingExpiry),
   createBooking: (token, body) => request('/api/v1/bookings', { method: 'POST', token, body }),
-  getMyBookings: (token) => request('/api/v1/bookings?size=100', { token }).then(unwrapListPayload),
-  getMyBooking: (token, bookingId) => request(`/api/v1/bookings/${bookingId}`, { token }),
+  getMyBookings: (token) => request('/api/v1/bookings?size=100', { token }).then(unwrapListPayload).then(items => items.map(normalizeBookingExpiry)),
+  getMyBooking: (token, bookingId) => request(`/api/v1/bookings/${bookingId}`, { token }).then(normalizeBookingExpiry),
   cancelBooking: (token, bookingId) => request(`/api/v1/bookings/${bookingId}`, { method: 'DELETE', token }),
   createStandaloneFoodOrder: (token, body) => request('/api/v1/food-orders', { method: 'POST', token, body }),
   getMyFoodOrders: (token) => request('/api/v1/food-orders/my', { token }).then(unwrapListPayload),
