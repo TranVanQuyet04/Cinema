@@ -1,24 +1,52 @@
-# Cinema
+﻿# CinePremier
 
-Cinema is a work-in-progress cinema booking application developed as a team project. This repository contains a snapshot of the frontend and backend for portfolio review.
+A cinema booking application with a React frontend and a microservice backend. Visitors can explore movies and showtimes, reserve seats, and go through the booking flow. The application also includes tools for cinema managers and administrators.
 
-**Frontend preview:** [cinema-six-brown.vercel.app](https://cinema-six-brown.vercel.app/) — UI preview only. The backend is not publicly deployed, so API-dependent features are unavailable.
+**[Open the live demo](https://cinema-six-brown.vercel.app/)**
 
-## Project structure
+The frontend runs on Vercel. For this demo, the backend runs on a local machine and is exposed through a temporary tunnel, so API-dependent features are available only while that machine, its services and the tunnel are running. The demo may be unavailable without notice.
 
-- `frontend/` — React, TypeScript and Vite application.
-- `backend/` — Java microservices, a Python recommendation service and local infrastructure configuration.
+## Features
 
-The backend includes an API gateway and services for identity, catalog, booking and payment. PostgreSQL and RabbitMQ support data storage and asynchronous communication.
+- Movie catalogue, cinema and showtime browsing.
+- Seat selection and booking, with a time-limited seat hold.
+- Customer accounts, email verification and Google sign-in.
+- Manager tools for showtimes, rooms and ticket prices; administrator tools for users and catalogue management.
+- Payment and wallet services, plus a movie recommendation service. Payment integration uses a sandbox for demo testing.
 
-## Running locally
+Availability of individual features depends on backend services and third-party configuration. This is a portfolio demo, not a production payment system.
 
-See [frontend/README.md](frontend/README.md) and [backend/README.md](backend/README.md) for service-specific setup and prerequisites. Local configuration and external credentials are not included in this snapshot. Review example settings before running the application.
+## Architecture
 
-## Status
+```text
+React + TypeScript + Vite (Vercel)
+             |
+         API Gateway
+             |
+  Identity | Catalog | Booking | Payment
+             |
+   PostgreSQL and RabbitMQ
 
-This project is still under development. End-to-end verification of a public deployment has not yet been completed.
+  Python / FastAPI recommendation service
+```
 
-## Attribution
+The gateway routes requests to Java services. PostgreSQL stores service data and RabbitMQ supports asynchronous communication. The recommendation service uses Python and FastAPI.
 
-This is a team project. Individual contributions will be documented as the portfolio is developed.
+## Repository
+
+- [`frontend/`](frontend/) — frontend application.
+- [`backend/`](backend/) — API gateway, backend services and local Docker configuration.
+- [Backend setup and service overview](backend/README.md) — prerequisites, configuration and local startup.
+
+For frontend development, install the dependencies and start Vite from `frontend/`:
+
+```bash
+npm install
+npm run dev
+```
+
+Configure frontend API and OAuth environment variables for your own environment. Do not commit `.env` files, passwords, API keys or payment credentials. Browser-exposed `VITE_` values are public and must not contain secrets.
+
+## Project status and attribution
+
+This repository is a portfolio snapshot of a team project and remains under development. The demo depends on local infrastructure and external providers; a successful page load does not guarantee all integrations are available. Individual contributions are not yet documented here.
