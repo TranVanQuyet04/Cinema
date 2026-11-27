@@ -2,6 +2,7 @@ package com.cinemaai.identity.service.impl;
 
 import com.cinemaai.identity.config.MailProperties;
 import com.cinemaai.identity.exception.BadRequestException;
+import com.cinemaai.identity.exception.MailDeliveryException;
 import com.cinemaai.identity.service.MailService;
 import jakarta.mail.MessagingException;
 import jakarta.mail.internet.MimeMessage;
@@ -26,11 +27,9 @@ public class MailServiceImpl implements MailService {
 
     @Override
     public void sendOtp(String to, String otp, String purpose) {
-        log.info("========== [OTP EMAIL] Recipient: {}, Purpose: {}, OTP Code: {} ==========", to, purpose, otp);
-
         if (!mailProperties.isEnabled()) {
-            log.warn("OTP email was not sent via SMTP because app.mail.enabled is false. Use the logged OTP code above.");
-            return;
+            log.warn("OTP email delivery is disabled");
+            throw new MailDeliveryException();
         }
 
         if (to == null || to.isBlank()) {
@@ -39,8 +38,8 @@ public class MailServiceImpl implements MailService {
 
         JavaMailSender mailSender = mailSenderProvider.getIfAvailable();
         if (mailSender == null) {
-            log.warn("JavaMailSender is not configured. Falling back to console OTP: {}", otp);
-            return;
+            log.warn("OTP email sender is not configured");
+            throw new MailDeliveryException();
         }
 
         try {
@@ -53,7 +52,8 @@ public class MailServiceImpl implements MailService {
             mailSender.send(message);
             log.info("OTP email successfully sent to {}", to);
         } catch (MailException | MessagingException exception) {
-            log.warn("Could not send OTP email via SMTP to {}: {}. OTP is logged in console.", to, exception.getMessage());
+            log.warn("OTP email delivery failed: {}", exception.getClass().getSimpleName());
+            throw new MailDeliveryException();
         }
     }
 

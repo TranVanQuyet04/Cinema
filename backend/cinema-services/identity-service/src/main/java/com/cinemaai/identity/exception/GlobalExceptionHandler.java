@@ -106,6 +106,11 @@ public class GlobalExceptionHandler {
         return build(HttpStatus.BAD_REQUEST, "Tham số đường dẫn hoặc truy vấn không hợp lệ: " + exception.getName(), request);
     }
 
+    @ExceptionHandler(MailDeliveryException.class)
+    public ResponseEntity<ErrorResponse> handleMailDelivery(MailDeliveryException exception, HttpServletRequest request) {
+        return build(HttpStatus.SERVICE_UNAVAILABLE, exception.getMessage(), request);
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleUnexpected(Exception exception, HttpServletRequest request) {
         log.error("Unexpected error at {}: {}", request.getRequestURI(), exception.getMessage(), exception);

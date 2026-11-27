@@ -410,15 +410,9 @@ public class UserServiceImpl implements UserService {
         }
         String otp = String.format("%06d", SECURE_RANDOM.nextInt(1_000_000));
         LocalDateTime expiresAt = LocalDateTime.now().plusMinutes(5);
+        provisionOtpMap.remove(cleanEmail);
+        mailService.sendOtp(cleanEmail, otp, "Xác minh cấp tài khoản");
         provisionOtpMap.put(cleanEmail, new ProvisionOtpRecord(cleanEmail, otp, expiresAt, false));
-        log.info("========== [PROVISION OTP] Email: {}, OTP: {} ==========", cleanEmail, otp);
-        if (mailService != null) {
-            try {
-                mailService.sendOtp(cleanEmail, otp, "Xác minh cấp tài khoản");
-            } catch (Exception e) {
-                log.warn("Không thể gửi email OTP qua SMTP: {}", e.getMessage());
-            }
-        }
     }
 
     @Override
